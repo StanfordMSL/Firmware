@@ -38,7 +38,7 @@
 #include "simulator.h"
 #include <simulator_config.h>
 #include "errno.h"
-#include <geo/geo.h>
+#include <lib/ecl/geo/geo.h>
 #include <drivers/drv_pwm_output.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -47,15 +47,12 @@
 #include <mathlib/mathlib.h>
 #include <uORB/topics/vehicle_local_position.h>
 
+#include <limits>
+
 extern "C" __EXPORT hrt_abstime hrt_reset(void);
 
 #define SEND_INTERVAL 	20
 #define UDP_PORT 	14560
-
-#define PRESS_GROUND 101325.0f
-#define DENSITY 1.2041f
-
-static const float mg2ms2 = CONSTANTS_ONE_G / 1000.0f;
 
 #ifdef ENABLE_UART_RC_INPUT
 #ifndef B460800
@@ -245,9 +242,10 @@ void Simulator::update_sensors(mavlink_hil_sensor_t *imu)
 	perf_begin(_perf_mag);
 
 	RawBaroData baro = {};
-	// calculate air pressure from altitude (valid for low altitude)
-	baro.pressure = (PRESS_GROUND - CONSTANTS_ONE_G * DENSITY * imu->pressure_alt) / 100.0f; // convert from Pa to mbar
-	baro.altitude = imu->pressure_alt;
+
+	// Get air pressure and pressure altitude
+	// valid for troposphere (below 11km AMSL)
+	baro.pressure = imu->abs_pressure;
 	baro.temperature = imu->temperature;
 
 	write_baro_data(&baro);
@@ -528,16 +526,16 @@ void Simulator::handle_message(mavlink_message_t *msg, bool publish)
 			hil_lpos.ref_lon = _hil_ref_lon;
 			hil_lpos.ref_alt = _hil_ref_alt;
 			hil_lpos.ref_timestamp = _hil_ref_timestamp;
-			hil_lpos.vxy_max = 0.0f;
-			hil_lpos.limit_hagl = false;
+			hil_lpos.vxy_max = std::numeric_limits<float>::infinity();
+			hil_lpos.vz_max = std::numeric_limits<float>::infinity();
+			hil_lpos.hagl_min = std::numeric_limits<float>::infinity();
+			hil_lpos.hagl_max = std::numeric_limits<float>::infinity();
 
 			// always publish ground truth attitude message
 			int hil_lpos_multi;
 			orb_publish_auto(ORB_ID(vehicle_local_position_groundtruth), &_lpos_pub, &hil_lpos, &hil_lpos_multi,
 					 ORB_PRIO_HIGH);
 		}
-
-
 
 		break;
 	}
@@ -631,12 +629,12 @@ void Simulator::initializeSensorData()
 {
 	// write sensor data to memory so that drivers can copy data from there
 	RawMPUData mpu = {};
-	mpu.accel_z = 9.81f;
+	mpu.accel_z = CONSTANTS_ONE_G;
 
 	write_MPU_data(&mpu);
 
 	RawAccelData accel = {};
-	accel.z = 9.81f;
+	accel.z = CONSTANTS_ONE_G;
 
 	write_accel_data(&accel);
 
@@ -650,7 +648,6 @@ void Simulator::initializeSensorData()
 	RawBaroData baro = {};
 	// calculate air pressure from altitude (valid for low altitude)
 	baro.pressure = 120000.0f;
-	baro.altitude = 0.0f;
 	baro.temperature = 25.0f;
 
 	write_baro_data(&baro);
@@ -672,12 +669,6 @@ void Simulator::pollForMAVLinkMessages(bool publish, int udp_port)
 	// udp socket data
 	struct sockaddr_in _myaddr;
 
-	if (udp_port < 1) {
-		int prt;
-		param_get(param_find("SITL_UDP_PRT"), &prt);
-		udp_port = prt;
-	}
-
 	// try to setup udp socket for communcation with simulator
 	memset((char *)&_myaddr, 0, sizeof(_myaddr));
 	_myaddr.sin_family = AF_INET;
@@ -685,12 +676,12 @@ void Simulator::pollForMAVLinkMessages(bool publish, int udp_port)
 	_myaddr.sin_port = htons(udp_port);
 
 	if ((_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		PX4_WARN("create socket failed\n");
+		PX4_ERR("create socket failed (%i)", errno);
 		return;
 	}
 
 	if (bind(_fd, (struct sockaddr *)&_myaddr, sizeof(_myaddr)) < 0) {
-		PX4_WARN("bind failed\n");
+		PX4_ERR("bind for UDP port %i failed (%i)", udp_port, errno);
 		return;
 	}
 
@@ -1036,9 +1027,9 @@ int Simulator::publish_sensor_topics(mavlink_hil_sensor_t *imu)
 		struct accel_report accel = {};
 
 		accel.timestamp = timestamp;
-		accel.x_raw = imu->xacc / mg2ms2;
-		accel.y_raw = imu->yacc / mg2ms2;
-		accel.z_raw = imu->zacc / mg2ms2;
+		accel.x_raw = imu->xacc / (CONSTANTS_ONE_G / 1000.0f);
+		accel.y_raw = imu->yacc / (CONSTANTS_ONE_G / 1000.0f);
+		accel.z_raw = imu->zacc / (CONSTANTS_ONE_G / 1000.0f);
 		accel.x = imu->xacc;
 		accel.y = imu->yacc;
 		accel.z = imu->zacc;
@@ -1073,7 +1064,6 @@ int Simulator::publish_sensor_topics(mavlink_hil_sensor_t *imu)
 
 		baro.timestamp = timestamp;
 		baro.pressure = imu->abs_pressure;
-		baro.altitude = imu->pressure_alt;
 		baro.temperature = imu->temperature;
 
 		int baro_multi;
@@ -1104,6 +1094,18 @@ int Simulator::publish_flow_topic(mavlink_hil_optical_flow_t *flow_mavlink)
 	flow.pixel_flow_x_integral = flow_mavlink->integrated_x;
 	flow.pixel_flow_y_integral = flow_mavlink->integrated_y;
 	flow.quality = flow_mavlink->quality;
+
+	/* fill in sensor limits */
+	float flow_rate_max;
+	param_get(param_find("SENS_FLOW_MAXR"), &flow_rate_max);
+	float flow_min_hgt;
+	param_get(param_find("SENS_FLOW_MINHGT"), &flow_min_hgt);
+	float flow_max_hgt;
+	param_get(param_find("SENS_FLOW_MAXHGT"), &flow_max_hgt);
+
+	flow.max_flow_rate = flow_rate_max;
+	flow.min_ground_distance = flow_min_hgt;
+	flow.max_ground_distance = flow_max_hgt;
 
 	/* rotate measurements according to parameter */
 	int32_t flow_rot_int;
@@ -1165,6 +1167,7 @@ int Simulator::publish_distance_topic(mavlink_distance_sensor_t *dist_mavlink)
 	dist.id = dist_mavlink->id;
 	dist.orientation = dist_mavlink->orientation;
 	dist.covariance = dist_mavlink->covariance / 100.0f;
+	dist.signal_quality = -1;
 
 	int dist_multi;
 	orb_publish_auto(ORB_ID(distance_sensor), &_dist_pub, &dist, &dist_multi, ORB_PRIO_HIGH);

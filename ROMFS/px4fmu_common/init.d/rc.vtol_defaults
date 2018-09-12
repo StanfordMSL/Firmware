@@ -1,4 +1,9 @@
 #!nsh
+#
+# VTOL default parameters.
+#
+# NOTE: Script variables are declared/initialized/unset in the rcS script.
+#
 
 set VEHICLE_TYPE vtol
 
@@ -16,7 +21,9 @@ then
 	param set NAV_ACC_RAD 3
 
 	param set RTL_LAND_DELAY 0
+
 fi
 
-# set environment variables (!= parameters)
-set PWM_RATE 400
+# Set environment variables (!= parameters)
+param set PWM_RATE 400
+param set PWM_AUX_RATE 50

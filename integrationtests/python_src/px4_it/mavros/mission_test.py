@@ -50,7 +50,6 @@ import os
 import px4tools
 import sys
 from mavros import mavlink
-from mavros.mission import QGroundControlWP
 from mavros_msgs.msg import Mavlink, Waypoint, WaypointReached
 from mavros_test_common import MavrosTestCommon
 from pymavlink import mavutil
@@ -61,8 +60,10 @@ def get_last_log():
     try:
         log_path = os.environ['PX4_LOG_DIR']
     except KeyError:
-        log_path = os.path.join(os.environ['HOME'],
-                                '.ros/rootfs/fs/microsd/log')
+        try:
+            log_path = os.path.join(os.environ['ROS_HOME'], 'log')
+        except KeyError:
+            log_path = os.path.join(os.environ['HOME'], '.ros/log')
     last_log_dir = sorted(glob.glob(os.path.join(log_path, '*')))[-1]
     last_log = sorted(glob.glob(os.path.join(last_log_dir, '*.ulg')))[-1]
     return last_log
@@ -71,26 +72,12 @@ def get_last_log():
 def read_mission(mission_filename):
     wps = []
     with open(mission_filename, 'r') as f:
-        mission_filename_ext = os.path.splitext(mission_filename)[1]
-        if mission_filename_ext == '.plan':
-            for waypoint in read_plan_file(f):
-                wps.append(waypoint)
-                rospy.logdebug(waypoint)
-        elif mission_filename_ext == '.mission':
-            for waypoint in read_mission_file(f):
-                wps.append(waypoint)
-                rospy.logdebug(waypoint)
-        elif mission_filename_ext == '.txt':
-            mission = QGroundControlWP()
-            for waypoint in mission.read(f):
-                wps.append(waypoint)
-                rospy.logdebug(waypoint)
-        else:
-            raise IOError("unknown mission file extension",
-                          mission_filename_ext)
+        for waypoint in read_plan_file(f):
+            wps.append(waypoint)
+            rospy.logdebug(waypoint)
 
     # set first item to current
-    if wps[0]:
+    if wps:
         wps[0].is_current = True
 
     return wps
@@ -118,26 +105,6 @@ def read_plan_file(f):
                 x_lat=float(wp['params'][4]),
                 y_long=float(wp['params'][5]),
                 z_alt=float(wp['params'][6]),
-                autocontinue=bool(wp['autoContinue']))
-    else:
-        raise IOError("no mission items")
-
-
-def read_mission_file(f):
-    d = json.load(f)
-    if 'items' in d:
-        for wp in d['items']:
-            yield Waypoint(
-                is_current=False,
-                frame=int(wp['frame']),
-                command=int(wp['command']),
-                param1=float(wp['param1']),
-                param2=float(wp['param2']),
-                param3=float(wp['param3']),
-                param4=float(wp['param4']),
-                x_lat=float(wp['coordinate'][0]),
-                y_long=float(wp['coordinate'][1]),
-                z_alt=float(wp['coordinate'][2]),
                 autocontinue=bool(wp['autoContinue']))
     else:
         raise IOError("no mission items")
@@ -233,11 +200,9 @@ class MavrosMissionTest(MavrosTestCommon):
             reached = (
                 # advanced to next wp
                 (index < self.mission_wp.current_seq)
-                # end of mission, reset to first wp
-                or (mission_length > 1 and index == (mission_length - 1)
-                    and self.mission_wp.current_seq == 0)
-                # end of mission with only 1 wp
-                or (mission_length == 1 and self.mission_item_reached == 0))
+                # end of mission
+                or (index == (mission_length - 1) and
+                    self.mission_item_reached == index))
 
             if reached:
                 rospy.loginfo(
@@ -272,7 +237,7 @@ class MavrosMissionTest(MavrosTestCommon):
 
         self.mission_name = sys.argv[1]
         mission_file = os.path.dirname(
-            os.path.realpath(__file__)) + "/" + sys.argv[1]
+            os.path.realpath(__file__)) + "/missions/" + sys.argv[1]
 
         rospy.loginfo("reading mission {0}".format(mission_file))
         try:
@@ -295,8 +260,8 @@ class MavrosMissionTest(MavrosTestCommon):
         rospy.loginfo("run mission {0}".format(self.mission_name))
         for index, waypoint in enumerate(wps):
             # only check position for waypoints where this makes sense
-            if (waypoint.frame == Waypoint.FRAME_GLOBAL_REL_ALT
-                    or waypoint.frame == Waypoint.FRAME_GLOBAL):
+            if (waypoint.frame == Waypoint.FRAME_GLOBAL_REL_ALT or
+                    waypoint.frame == Waypoint.FRAME_GLOBAL):
                 alt = waypoint.z_alt
                 if waypoint.frame == Waypoint.FRAME_GLOBAL_REL_ALT:
                     alt += self.altitude.amsl - self.altitude.relative
@@ -318,8 +283,8 @@ class MavrosMissionTest(MavrosTestCommon):
                 self.wait_for_vtol_state(transition, 60, index)
 
             # after reaching position, wait for landing detection if applicable
-            if (waypoint.command == mavutil.mavlink.MAV_CMD_NAV_VTOL_LAND
-                    or waypoint.command == mavutil.mavlink.MAV_CMD_NAV_LAND):
+            if (waypoint.command == mavutil.mavlink.MAV_CMD_NAV_VTOL_LAND or
+                    waypoint.command == mavutil.mavlink.MAV_CMD_NAV_LAND):
                 self.wait_for_landed_state(
                     mavutil.mavlink.MAV_LANDED_STATE_ON_GROUND, 60, index)
 

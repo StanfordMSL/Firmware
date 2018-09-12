@@ -57,7 +57,7 @@
 #include <uORB/topics/sensor_correction.h>
 #include <drivers/drv_gyro.h>
 #include <systemlib/mavlink_log.h>
-#include <systemlib/param/param.h>
+#include <parameters/param.h>
 #include <systemlib/err.h>
 
 static const char *sensor_name = "gyro";
@@ -316,7 +316,7 @@ int do_gyro_calibration(orb_advert_t *mavlink_log_pub)
 			// and match it up with the one from the uORB subscription, because the
 			// instance ordering of uORB and the order of the FDs may not be the same.
 
-			if(report.device_id == worker_data.device_id[cur_gyro]) {
+			if (report.device_id == (uint32_t)worker_data.device_id[cur_gyro]) {
 				// Device IDs match, correct ORB instance for this gyro
 				found_cur_gyro = true;
 			} else {

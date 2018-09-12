@@ -63,7 +63,7 @@
 
 #include <board_config.h>
 
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
 #include <drivers/device/i2c.h>
@@ -207,17 +207,19 @@ protected:
 	virtual int probe();
 
 private:
-	work_s          _work;
-	unsigned        _measure_ticks;
+	work_s          _work{};
+	unsigned        _measure_ticks{0};
 
-	ringbuffer::RingBuffer  *_reports;
-	struct mag_calibration_s    _scale;
-	float           _range_scale;
-	bool        _collect_phase;
-	int         _class_instance;
-	int         _orb_class_instance;
+	ringbuffer::RingBuffer  *_reports{nullptr};
 
-	orb_advert_t        _mag_topic;
+	struct mag_calibration_s	_scale {};
+	float				_range_scale{0.003f}; /* default range scale from counts to gauss */
+
+	bool        _collect_phase{false};
+	int         _class_instance{-1};
+	int         _orb_class_instance{-1};
+
+	orb_advert_t        _mag_topic{nullptr};
 
 	perf_counter_t      _sample_perf;
 	perf_counter_t      _comms_errors;
@@ -225,16 +227,16 @@ private:
 	perf_counter_t      _conf_errors;
 
 	/* status reporting */
-	bool            _sensor_ok;         /**< sensor was found and reports ok */
-	bool            _calibrated;        /**< the calibration is valid */
-	bool			_ctl_reg_mismatch;	/**< control register value mismatch after checking */
+	bool			_sensor_ok{false};		/**< sensor was found and reports ok */
+	bool			_calibrated{false};		/**< the calibration is valid */
+	bool			_ctl_reg_mismatch{false};	/**< control register value mismatch after checking */
 
 	enum Rotation       _rotation;
 
-	struct mag_report   _last_report;           /**< used for info() */
+	sensor_mag_s   _last_report{};           /**< used for info() */
 
-	uint8_t 		_ctl3_reg;
-	uint8_t			_ctl4_reg;
+	uint8_t 		_ctl3_reg{0};
+	uint8_t			_ctl4_reg{0};
 
 	/**
 	 * Initialise the automatic measurement state machine and start it.
@@ -356,13 +358,6 @@ private:
 	float       meas_to_float(uint8_t in[2]);
 
 	/**
-	 * Check the current calibration and update device status
-	 *
-	 * @return 0 if calibration is ok, 1 else
-	 */
-	int         check_calibration();
-
-	/**
 	* Check the current scale calibration
 	*
 	* @return 0 if scale calibration is ok, 1 else
@@ -396,31 +391,13 @@ extern "C" __EXPORT int ist8310_main(int argc, char *argv[]);
 
 IST8310::IST8310(int bus_number, int address, const char *path, enum Rotation rotation) :
 	I2C("IST8310", path, bus_number, address, IST8310_DEFAULT_BUS_SPEED),
-	_work{},
-	_measure_ticks(0),
-	_reports(nullptr),
-	_scale{},
-	_range_scale(0.003), /* default range scale from counts to gauss */
-	_collect_phase(false),
-	_class_instance(-1),
-	_orb_class_instance(-1),
-	_mag_topic(nullptr),
 	_sample_perf(perf_alloc(PC_ELAPSED, "ist8310_read")),
 	_comms_errors(perf_alloc(PC_COUNT, "ist8310_com_err")),
 	_range_errors(perf_alloc(PC_COUNT, "ist8310_rng_err")),
 	_conf_errors(perf_alloc(PC_COUNT, "ist8310_conf_err")),
-	_sensor_ok(false),
-	_calibrated(false),
-	_ctl_reg_mismatch(false),
-	_rotation(rotation),
-	_last_report{0},
-	_ctl3_reg(0),
-	_ctl4_reg(0)
+	_rotation(rotation)
 {
 	_device_id.devid_s.devtype = DRV_MAG_DEVTYPE_IST8310;
-
-	// enable debug() calls
-	_debug_enabled = false;
 
 	// default scaling
 	_scale.x_offset = 0;
@@ -429,9 +406,6 @@ IST8310::IST8310(int bus_number, int address, const char *path, enum Rotation ro
 	_scale.y_scale = 1.0f;
 	_scale.z_offset = 0;
 	_scale.z_scale = 1.0f;
-
-	// work_cancel in the dtor will explode if we don't do this...
-	memset(&_work, 0, sizeof(_work));
 }
 
 IST8310::~IST8310()
@@ -714,20 +688,12 @@ IST8310::ioctl(struct file *filp, int cmd, unsigned long arg)
 		/* same as pollrate because device is in single measurement mode*/
 		return 1000000 / TICK2USEC(_measure_ticks);
 
-	case MAGIOCSRANGE:
-		return OK;
-
-	case MAGIOCGRANGE:
-		return 0;
-
 	case MAGIOCEXSTRAP:
 		return set_selftest(arg);
 
 	case MAGIOCSSCALE:
 		/* set new scale factors */
 		memcpy(&_scale, (struct mag_calibration_s *)arg, sizeof(_scale));
-		/* check calibration, but not actually return an error */
-		(void)check_calibration();
 		return 0;
 
 	case MAGIOCGSCALE:
@@ -738,11 +704,7 @@ IST8310::ioctl(struct file *filp, int cmd, unsigned long arg)
 	case MAGIOCCALIBRATE:
 		return calibrate(filp, arg);
 
-	case MAGIOCSELFTEST:
-		return check_calibration();
-
 	case MAGIOCGEXTERNAL:
-		DEVICE_DEBUG("MAGIOCGEXTERNAL in main driver");
 		return external();
 
 	default:
@@ -1017,7 +979,7 @@ out:
 
 int IST8310::calibrate(struct file *filp, unsigned enable)
 {
-	struct mag_report report;
+	struct mag_report report {};
 	ssize_t sz;
 	int ret = 1;
 	float total_x = 0.0f;
@@ -1167,25 +1129,6 @@ int IST8310::check_offset()
 	return !offset_valid;
 }
 
-int IST8310::check_calibration()
-{
-	bool offset_valid = (check_offset() == OK);
-	bool scale_valid  = (check_scale() == OK);
-
-	if (_calibrated != (offset_valid && scale_valid)) {
-
-		if (!scale_valid || !offset_valid) {
-			PX4_WARN("mag cal status changed %s%s", (scale_valid) ? "" : "scale invalid ",
-				 (offset_valid) ? "" : "offset invalid");
-		}
-
-		_calibrated = (offset_valid && scale_valid);
-	}
-
-	/* return 0 if calibrated, 1 else */
-	return (!_calibrated);
-}
-
 int
 IST8310::set_selftest(unsigned enable)
 {
@@ -1253,12 +1196,7 @@ IST8310::print_info()
 	perf_print_counter(_sample_perf);
 	perf_print_counter(_comms_errors);
 	printf("poll interval:  %u ticks\n", _measure_ticks);
-	printf("output  (%.2f %.2f %.2f)\n", (double)_last_report.x, (double)_last_report.y, (double)_last_report.z);
-	printf("offsets (%.2f %.2f %.2f)\n", (double)_scale.x_offset, (double)_scale.y_offset, (double)_scale.z_offset);
-	printf("scaling (%.2f %.2f %.2f) 1/range_scale %.2f\n",
-	       (double)_scale.x_scale, (double)_scale.y_scale, (double)_scale.z_scale,
-	       (double)(1.0f / _range_scale));
-	printf("temperature %.2f\n", (double)_last_report.temperature);
+	print_message(_last_report);
 	_reports->print_info("report queue");
 }
 
@@ -1279,13 +1217,10 @@ struct ist8310_bus_option {
 } bus_options[] = {
 	{ IST8310_BUS_I2C_EXTERNAL, "/dev/ist8310_ext", PX4_I2C_BUS_EXPANSION, NULL },
 #ifdef PX4_I2C_BUS_EXPANSION1
-	{ IST8310_BUS_I2C_EXTERNAL1, "/dev/ist8311_int", PX4_I2C_BUS_EXPANSION1, NULL },
+	{ IST8310_BUS_I2C_EXTERNAL1, "/dev/ist8311_ext1", PX4_I2C_BUS_EXPANSION1, NULL },
 #endif
 #ifdef PX4_I2C_BUS_EXPANSION2
-	{ IST8310_BUS_I2C_EXTERNAL2, "/dev/ist8312_int", PX4_I2C_BUS_EXPANSION2, NULL },
-#endif
-#ifdef PX4_I2C_BUS_EXPANSION3
-	{ IST8310_BUS_I2C_EXTERNAL3, "/dev/ist8313_int", PX4_I2C_BUS_EXPANSION3, NULL },
+	{ IST8310_BUS_I2C_EXTERNAL2, "/dev/ist8312_ext2", PX4_I2C_BUS_EXPANSION2, NULL },
 #endif
 #ifdef PX4_I2C_BUS_ONBOARD
 	{ IST8310_BUS_I2C_INTERNAL, "/dev/ist8310_int", PX4_I2C_BUS_ONBOARD, NULL },
@@ -1394,7 +1329,7 @@ void
 test(enum IST8310_BUS busid)
 {
 	struct ist8310_bus_option &bus = find_bus(busid);
-	struct mag_report report;
+	struct mag_report report {};
 	ssize_t sz;
 	int ret;
 	const char *path = bus.devpath;
@@ -1412,16 +1347,12 @@ test(enum IST8310_BUS busid)
 		err(1, "immediate read failed");
 	}
 
-	PX4_INFO("single read");
-	PX4_INFO("measurement: %.6f  %.6f  %.6f", (double)report.x, (double)report.y, (double)report.z);
-	PX4_INFO("time:        %lld", report.timestamp);
+	print_message(report);
 
 	/* check if mag is onboard or external */
 	if ((ret = ioctl(fd, MAGIOCGEXTERNAL, 0)) < 0) {
 		errx(1, "failed to get if mag is onboard or external");
 	}
-
-	PX4_INFO("device active: %s", ret ? "external" : "onboard");
 
 	/* set the queue depth to 5 */
 	if (OK != ioctl(fd, SENSORIOCSQUEUEDEPTH, 10)) {
@@ -1453,9 +1384,7 @@ test(enum IST8310_BUS busid)
 			err(1, "periodic read failed");
 		}
 
-		PX4_INFO("periodic read %u", i);
-		PX4_INFO("measurement: %.6f  %.6f  %.6f", (double)report.x, (double)report.y, (double)report.z);
-		PX4_INFO("time:        %lld", report.timestamp);
+		print_message(report);
 	}
 
 	PX4_INFO("PASS");

@@ -39,4 +39,14 @@ px4_add_library(drivers_board
 	spi.c
 	timer_config.c
 	usb.c
+	manifest.c
+)
+
+target_link_libraries(drivers_board
+	PRIVATE
+		drivers__led # drv_led_start
+		nuttx_apps # up_cxxinitialize
+		nuttx_arch # sdio
+		nuttx_drivers # sdio
+		parameters # param_init
 )

@@ -32,6 +32,7 @@
  ****************************************************************************/
 
 #include "SDP3X.hpp"
+#include <px4_getopt.h>
 
 // Driver 'main' command.
 extern "C" __EXPORT int sdp3x_airspeed_main(int argc, char *argv[]);
@@ -41,16 +42,39 @@ namespace sdp3x_airspeed
 {
 SDP3X *g_dev = nullptr;
 
-int start(uint8_t i2c_bus);
+int start();
+int start_bus(uint8_t i2c_bus);
 int stop();
-int test();
 int reset();
 
-// Start the driver.
-// This function call only returns once the driver is up and running
-// or failed to detect the sensor.
+/**
+ * Attempt to start driver on all available I2C busses.
+ *
+ * This function will return as soon as the first sensor
+ * is detected on one of the available busses or if no
+ * sensors are detected.
+ *
+ */
 int
-start(uint8_t i2c_bus)
+start()
+{
+	for (unsigned i = 0; i < NUM_I2C_BUS_OPTIONS; i++) {
+		if (start_bus(i2c_bus_options[i]) == PX4_OK) {
+			return PX4_OK;
+		}
+	}
+
+	return PX4_ERROR;
+}
+
+/**
+ * Start the driver on a specific bus.
+ *
+ * This function call only returns once the driver is up and running
+ * or failed to detect the sensor.
+ */
+int
+start_bus(uint8_t i2c_bus)
 {
 	int fd = -1;
 
@@ -104,8 +128,6 @@ fail:
 		g_dev = nullptr;
 	}
 
-	PX4_WARN("not started on bus %d", i2c_bus);
-
 	return PX4_ERROR;
 }
 
@@ -118,72 +140,6 @@ int stop()
 
 	} else {
 		PX4_ERR("driver not running");
-		return PX4_ERROR;
-	}
-
-	return PX4_OK;
-}
-
-// perform some basic functional tests on the driver;
-// make sure we can collect data from the sensor in polled
-// and automatic modes.
-int test()
-{
-	int fd = px4_open(PATH_SDP3X, O_RDONLY);
-
-	if (fd < 0) {
-		PX4_WARN("%s open failed (try 'sdp3x_airspeed start' if the driver is not running", PATH_SDP3X);
-		return PX4_ERROR;
-	}
-
-	// do a simple demand read
-	differential_pressure_s report;
-	ssize_t sz = px4_read(fd, &report, sizeof(report));
-
-	if (sz != sizeof(report)) {
-		PX4_WARN("immediate read failed");
-		return PX4_ERROR;
-	}
-
-	PX4_WARN("single read");
-	PX4_WARN("diff pressure: %d pa", (int)report.differential_pressure_filtered_pa);
-
-	/* start the sensor polling at 2Hz */
-	if (OK != px4_ioctl(fd, SENSORIOCSPOLLRATE, 2)) {
-		PX4_WARN("failed to set 2Hz poll rate");
-		return PX4_ERROR;
-	}
-
-	/* read the sensor 5x and report each value */
-	for (unsigned i = 0; i < 5; i++) {
-		px4_pollfd_struct_t fds;
-
-		/* wait for data to be ready */
-		fds.fd = fd;
-		fds.events = POLLIN;
-		int ret = px4_poll(&fds, 1, 2000);
-
-		if (ret != 1) {
-			PX4_ERR("timed out");
-			return PX4_ERROR;
-		}
-
-		/* now go get it */
-		sz = px4_read(fd, &report, sizeof(report));
-
-		if (sz != sizeof(report)) {
-			PX4_ERR("periodic read failed");
-			return PX4_ERROR;
-		}
-
-		PX4_WARN("periodic read %u", i);
-		PX4_WARN("diff pressure: %d pa", (int)report.differential_pressure_filtered_pa);
-		PX4_WARN("temperature: %d C (0x%02x)", (int)report.temperature, (unsigned) report.temperature);
-	}
-
-	/* reset the sensor polling to its default rate */
-	if (PX4_OK != px4_ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT)) {
-		PX4_WARN("failed to set default rate");
 		return PX4_ERROR;
 	}
 
@@ -219,11 +175,12 @@ int reset()
 static void
 sdp3x_airspeed_usage()
 {
-	PX4_WARN("usage: sdp3x_airspeed command [options]");
-	PX4_WARN("options:");
-	PX4_WARN("\t-b --bus i2cbus (%d)", PX4_I2C_BUS_DEFAULT);
-	PX4_WARN("command:");
-	PX4_WARN("\tstart|stop|reset|test");
+	PX4_INFO("usage: sdp3x_airspeed command [options]");
+	PX4_INFO("options:");
+	PX4_INFO("\t-b --bus i2cbus (%d)", PX4_I2C_BUS_DEFAULT);
+	PX4_INFO("\t-a --all");
+	PX4_INFO("command:");
+	PX4_INFO("\tstart|stop|reset");
 }
 
 int
@@ -231,43 +188,59 @@ sdp3x_airspeed_main(int argc, char *argv[])
 {
 	uint8_t i2c_bus = PX4_I2C_BUS_DEFAULT;
 
-	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--bus") == 0) {
-			if (argc > i + 1) {
-				i2c_bus = atoi(argv[i + 1]);
-			}
+	int myoptind = 1;
+	int ch;
+	const char *myoptarg = nullptr;
+	bool start_all = false;
+
+	while ((ch = px4_getopt(argc, argv, "ab:", &myoptind, &myoptarg)) != EOF) {
+		switch (ch) {
+		case 'b':
+			i2c_bus = atoi(myoptarg);
+			break;
+
+		case 'a':
+			start_all = true;
+			break;
+
+		default:
+			sdp3x_airspeed_usage();
+			return 0;
 		}
 	}
+
+	if (myoptind >= argc) {
+		sdp3x_airspeed_usage();
+		return -1;
+	}
+
 
 	/*
 	 * Start/load the driver.
 	 */
-	if (!strcmp(argv[1], "start")) {
-		return sdp3x_airspeed::start(i2c_bus);
+	if (!strcmp(argv[myoptind], "start")) {
+		if (start_all) {
+			return sdp3x_airspeed::start();
+
+		} else {
+			return sdp3x_airspeed::start_bus(i2c_bus);
+		}
 	}
 
 	/*
 	 * Stop the driver
 	 */
-	if (!strcmp(argv[1], "stop")) {
+	if (!strcmp(argv[myoptind], "stop")) {
 		return sdp3x_airspeed::stop();
-	}
-
-	/*
-	 * Test the driver/device.
-	 */
-	if (!strcmp(argv[1], "test")) {
-		return sdp3x_airspeed::test();
 	}
 
 	/*
 	 * Reset the driver.
 	 */
-	if (!strcmp(argv[1], "reset")) {
+	if (!strcmp(argv[myoptind], "reset")) {
 		return sdp3x_airspeed::reset();
 	}
 
 	sdp3x_airspeed_usage();
-
-	return PX4_OK;
+	return 0;
 }

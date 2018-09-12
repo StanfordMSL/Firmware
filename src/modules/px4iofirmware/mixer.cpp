@@ -49,10 +49,11 @@
 
 #include <drivers/drv_pwm_output.h>
 #include <drivers/drv_hrt.h>
+
+#include <mixer/mixer.h>
+#include <pwm_limit/pwm_limit.h>
 #include <rc/sbus.h>
 
-#include <systemlib/pwm_limit/pwm_limit.h>
-#include <lib/mixer/mixer.h>
 #include <uORB/topics/actuator_controls.h>
 
 #include "mixer.h"
@@ -66,7 +67,6 @@ extern "C" {
  * Maximum interval in us before FMU signal is considered lost
  */
 #define FMU_INPUT_DROP_LIMIT_US		500000
-#define NAN_VALUE	(0.0f/0.0f)
 
 /* current servo arm/disarm state */
 static volatile bool mixer_servos_armed = false;
@@ -249,10 +249,17 @@ mixer_tick(void)
 	}
 
 	/*
-	 * Set simple mixer trim values
-	 * (there should be a "dirty" flag to indicate that r_page_servo_control_trim has changed)
+	 * Set simple mixer trim values. If the OK flag is set the mixer is fully loaded.
 	 */
-	mixer_group.set_trims(r_page_servo_control_trim, PX4IO_SERVO_COUNT);
+	if (update_trims && r_status_flags & PX4IO_P_STATUS_FLAGS_MIXER_OK) {
+		update_trims = false;
+		mixer_group.set_trims(r_page_servo_control_trim, PX4IO_SERVO_COUNT);
+	}
+
+	/*
+	 * Update air-mode parameter
+	 */
+	mixer_group.set_airmode(REG_TO_BOOL(r_setup_airmode));
 
 
 	/*
@@ -284,7 +291,6 @@ mixer_tick(void)
 			mixer_group.set_max_delta_out_once(delta_out_max);
 		}
 
-		/* mix */
 		/* update parameter for mc thrust model if it updated */
 		if (update_mc_thrust_param) {
 			mixer_group.set_thrust_factor(REG_TO_FLOAT(r_setup_thr_fac));
@@ -474,7 +480,7 @@ mixer_callback(uintptr_t handle,
 		     control_group == actuator_controls_s::GROUP_INDEX_ATTITUDE_ALTERNATE) &&
 		    control_index == actuator_controls_s::INDEX_THROTTLE) {
 			/* mark the throttle as invalid */
-			control = NAN_VALUE;
+			control = NAN;
 		}
 	}
 
@@ -487,7 +493,7 @@ mixer_callback(uintptr_t handle,
  * not loaded faithfully.
  */
 
-static char mixer_text[PX4IO_MAX_MIXER_LENGHT];		/* large enough for one mixer */
+static char mixer_text[PX4IO_MAX_MIXER_LENGTH];		/* large enough for one mixer */
 static unsigned mixer_text_length = 0;
 static bool mixer_update_pending = false;
 
@@ -545,6 +551,10 @@ mixer_handle_text(const void *buffer, size_t length)
 
 	/* disable mixing, will be enabled once load is complete */
 	PX4_ATOMIC_MODIFY_CLEAR(r_status_flags, PX4IO_P_STATUS_FLAGS_MIXER_OK);
+
+	/* set the update flags to dirty so we reload those values after a mixer change */
+	update_trims = true;
+	update_mc_thrust_param = true;
 
 	/* abort if we're in the mixer - the caller is expected to retry */
 	if (in_mixer) {

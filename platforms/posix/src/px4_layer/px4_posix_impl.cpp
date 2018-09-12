@@ -46,7 +46,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <unistd.h>
-#include <systemlib/param/param.h>
+#include <parameters/param.h>
 #include "hrt_work.h"
 #include <drivers/drv_hrt.h>
 #include "px4_time.h"
@@ -57,10 +57,6 @@ extern pthread_t _shell_task_id;
 __BEGIN_DECLS
 
 long PX4_TICKS_PER_SEC = sysconf(_SC_CLK_TCK);
-
-#ifdef CONFIG_SHMEM
-extern void init_params(void);
-#endif
 
 __END_DECLS
 
@@ -77,11 +73,6 @@ void init_once()
 	hrt_work_queue_init();
 	hrt_init();
 	param_init();
-
-#ifdef CONFIG_SHMEM
-	PX4_DEBUG("Syncing params to shared memory\n");
-	init_params();
-#endif
 }
 
 void init(int argc, char *argv[], const char *app_name)

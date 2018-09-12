@@ -61,9 +61,8 @@
 
 #include <arch/board/board.h>
 
-#include "systemlib/systemlib.h"
 #include "systemlib/err.h"
-#include "systemlib/param/param.h"
+#include <parameters/param.h>
 #include "drivers/drv_pwm_output.h"
 
 static void	usage(const char *reason);
@@ -596,6 +595,10 @@ pwm_main(int argc, char *argv[])
 		if (set_mask == 0) {
 			usage("no channels set");
 			return 1;
+		}
+
+		if (pwm_value < 0) {
+			return 0;
 		}
 
 		if (pwm_value == 0) {

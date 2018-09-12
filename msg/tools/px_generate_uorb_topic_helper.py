@@ -24,18 +24,18 @@ type_map = {
 }
 
 type_serialize_map = {
-    'int8': 'SignedChar',
-    'int16': 'Short',
-    'int32': 'Int',
-    'int64': 'Long',
-    'uint8': 'UnsignedChar',
-    'uint16': 'UnsignedShort',
-    'uint32': 'UnsignedInt',
-    'uint64': 'UnsignedLong',
-    'float32': 'Float',
-    'float64': 'Double',
-    'bool': 'Bool',
-    'char': 'Char',
+    'int8': 'char',
+    'int16': 'int16_t',
+    'int32': 'int32_t',
+    'int64': 'int64_t',
+    'uint8': 'uint8_t',
+    'uint16': 'uint16_t',
+    'uint32': 'uint32_t',
+    'uint64': 'uint64_t',
+    'float32': 'float',
+    'float64': 'double',
+    'bool': 'bool',
+    'char': 'char',
 }
 
 type_idl_map = {
@@ -68,6 +68,20 @@ msgtype_size_map = {
     'char': 1,
 }
 
+type_printf_map = {
+    'int8': '%d',
+    'int16': '%d',
+    'int32': '%" PRId32 "',
+    'int64': '%" PRId64 "',
+    'uint8': '%u',
+    'uint16': '%u',
+    'uint32': '%" PRIu32 "',
+    'uint64': '%" PRIu64 "',
+    'float32': '%.4f',
+    'float64': '%.6f',
+    'bool': '%u',
+    'char': '%c',
+}
 
 def bare_name(msg_type):
     """
@@ -93,7 +107,7 @@ def sizeof_field_type(field):
 def get_children_fields(base_type, search_path):
     (package, name) = genmsg.names.package_resource_name(base_type)
     tmp_msg_context = genmsg.msg_loader.MsgContext.create_default()
-    spec_temp = genmsg.msg_loader.load_msg_by_type(tmp_msg_context, '%s/%s' %(package, name), search_path)  
+    spec_temp = genmsg.msg_loader.load_msg_by_type(tmp_msg_context, '%s/%s' %(package, name), search_path)
     sorted_fields = sorted(spec_temp.parsed_fields(), key=sizeof_field_type, reverse=True)
     return sorted_fields
 
@@ -103,7 +117,7 @@ def add_padding_bytes(fields, search_path):
     struct size
     returns a tuple with the struct size and padding at the end
     """
-    struct_size = 8 # account for the timestamp
+    struct_size = 0
     align_to = 8 # this is always 8, because of the 64bit timestamp
     i = 0
     padding_idx = 0
@@ -165,10 +179,93 @@ def convert_type(spec_type):
     return c_type
 
 
+def print_field(field):
+    """
+    Echo printf line
+    """
+
+    # check if there are any upper case letters in the field name
+    assert not any(a.isupper() for a in field.name), "%r field contains uppercase letters" % field.name
+
+    # skip padding
+    if field.name.startswith('_padding'):
+        return
+
+    bare_type = field.type
+    if '/' in field.type:
+        # removing prefix
+        bare_type = (bare_type.split('/'))[1]
+
+    msg_type, is_array, array_length = genmsg.msgs.parse_type(bare_type)
+
+    field_name = ""
+
+    if is_array:
+        c_type = "["
+
+        if msg_type in type_map:
+            p_type = type_printf_map[msg_type]
+
+        else:
+            for i in range(array_length):
+                print("PX4_INFO_RAW(\"\\t" + field.type + " " + field.name + "[" + str(i) + "]\");")
+                print(" print_message(message." + field.name + "[" + str(i) + "]);")
+            return
+
+        for i in range(array_length):
+
+            if i > 0:
+                c_type += ", "
+                field_name += ", "
+
+            if "float32" in field.type:
+                field_name += "(double)message." + field.name + "[" + str(i) + "]"
+            else:
+                field_name += "message." + field.name + "[" + str(i) + "]"
+
+            c_type += str(p_type)
+
+        c_type += "]"
+
+    else:
+        c_type = msg_type
+        if msg_type in type_map:
+            c_type = type_printf_map[msg_type]
+
+            field_name = "message." + field.name
+
+            # cast double
+            if field.type == "float32":
+                field_name = "(double)" + field_name
+            elif field.type == "bool":
+                c_type = '%s'
+                field_name = "(" + field_name + " ? \"True\" : \"False\")"
+
+        else:
+            print("PX4_INFO_RAW(\"\\n\\t" + field.name + "\");")
+            print("\tprint_message(message."+ field.name + ");")
+            return
+
+    if field.name == 'timestamp':
+        print("if (message.timestamp != 0) {\n\t\tPX4_INFO_RAW(\"\\t" + field.name + \
+            ": " + c_type + "  (%.6f seconds ago)\\n\", " + field_name + \
+            ", hrt_elapsed_time(&message.timestamp) / 1e6);\n\t} else {\n\t\tPX4_INFO_RAW(\"\\n\");\n\t}" )
+    elif field.name == 'device_id':
+        print("char device_id_buffer[80];")
+        print("device::Device::device_id_print_buffer(device_id_buffer, sizeof(device_id_buffer), message.device_id);")
+        print("PX4_INFO_RAW(\"\\tdevice_id: %d (%s) \\n\", message.device_id, device_id_buffer);" )
+    else:
+        print("PX4_INFO_RAW(\"\\t" + field.name + ": " + c_type + "\\n\", " + field_name + ");" )
+
+
 def print_field_def(field):
     """
     Print the C type from a field
     """
+
+    # check if there are any upper case letters in the field name
+    assert not any(a.isupper() for a in field.name), "%r field contains uppercase letters" % field.name
+
     type_name = field.type
     # detect embedded types
     sl_pos = type_name.find('/')

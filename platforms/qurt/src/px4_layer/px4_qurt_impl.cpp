@@ -48,7 +48,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <semaphore.h>
-#include <systemlib/param/param.h>
+#include <parameters/param.h>
 #include "hrt_work.h"
 #include "px4_log.h"
 
@@ -71,7 +71,6 @@ unsigned int sleep(unsigned int sec)
 }
 
 extern void hrt_init(void);
-extern void init_params();
 
 #if 0
 void qurt_log(const char *fmt, ...)
@@ -108,9 +107,6 @@ void init_once(void)
 	hrt_work_queue_init();
 	hrt_init();
 	param_init();
-
-	/* Shared memory param sync*/
-	init_params();
 }
 
 void init(int argc, char *argv[], const char *app_name)
@@ -165,4 +161,9 @@ int fprintf(FILE *stream, const char *format, ...)
 int fputc(int c, FILE *stream)
 {
 	return c;
+}
+
+int putchar(int character)
+{
+	return character;
 }

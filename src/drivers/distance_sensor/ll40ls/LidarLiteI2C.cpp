@@ -47,6 +47,7 @@
 #include <poll.h>
 #include <string.h>
 #include <stdio.h>
+#include <mathlib/mathlib.h>
 #include <drivers/drv_hrt.h>
 
 LidarLiteI2C::LidarLiteI2C(int bus, const char *path, uint8_t rotation, int address) :
@@ -124,7 +125,7 @@ int LidarLiteI2C::init()
 				 &_orb_class_instance, ORB_PRIO_LOW);
 
 	if (_distance_sensor_topic == nullptr) {
-		DEVICE_DEBUG("failed to create distance_sensor object. Did you start uOrb?");
+		PX4_DEBUG("failed to create distance_sensor object. Did you start uOrb?");
 	}
 
 	ret = OK;
@@ -184,9 +185,9 @@ int LidarLiteI2C::probe()
 			goto ok;
 		}
 
-		DEVICE_DEBUG("probe failed hw_version=0x%02x sw_version=0x%02x\n",
-			     (unsigned)_hw_version,
-			     (unsigned)_sw_version);
+		PX4_DEBUG("probe failed hw_version=0x%02x sw_version=0x%02x\n",
+			  (unsigned)_hw_version,
+			  (unsigned)_sw_version);
 	}
 
 	// not found on any address
@@ -308,7 +309,7 @@ int LidarLiteI2C::measure()
 
 	if (OK != ret) {
 		perf_count(_comms_errors);
-		DEVICE_DEBUG("i2c::transfer returned %d", ret);
+		PX4_DEBUG("i2c::transfer returned %d", ret);
 
 		// if we are getting lots of I2C transfer errors try
 		// resetting the sensor
@@ -329,17 +330,26 @@ int LidarLiteI2C::measure()
 }
 
 /*
-  reset the sensor to power on defaults
+  reset the sensor to power on defaults plus additional configurations
  */
 int LidarLiteI2C::reset_sensor()
 {
-	int ret = write_reg(LL40LS_MEASURE_REG, LL40LS_MSRREG_RESET);
+	int ret;
+	ret = write_reg(LL40LS_MEASURE_REG, LL40LS_MSRREG_RESET);
 
 	if (ret != OK) {
 		return ret;
 	}
 
 	// wait for sensor reset to complete
+	usleep(50000);
+	ret = write_reg(LL40LS_SIG_COUNT_VAL_REG, LL40LS_SIG_COUNT_VAL_MAX);
+
+	if (ret != OK) {
+		return ret;
+	}
+
+	// wait for register write to complete
 	usleep(1000);
 
 	return OK;
@@ -397,7 +407,7 @@ int LidarLiteI2C::collect()
 			  read before it is ready, so only consider it
 			  an error if more than 100ms has elapsed.
 			 */
-			DEVICE_DEBUG("error reading from sensor: %d", ret);
+			PX4_DEBUG("error reading from sensor: %d", ret);
 			perf_count(_comms_errors);
 
 			if (perf_event_count(_comms_errors) % 10 == 0) {
@@ -439,6 +449,80 @@ int LidarLiteI2C::collect()
 
 	_last_distance = distance_cm;
 
+	/* Relative signal strength measurement, i.e. the strength of
+	 * the main signal peak compared to the general noise level*/
+	uint8_t signal_strength_reg = LL40LS_SIGNAL_STRENGTH_REG;
+	ret = lidar_transfer(&signal_strength_reg, 1, &val[0], 1);
+
+	// check if the transfer failed
+	if (ret < 0) {
+		if (hrt_absolute_time() - _acquire_time_usec > LL40LS_CONVERSION_TIMEOUT) {
+			/*
+			  NACKs from the sensor are expected when we
+			  read before it is ready, so only consider it
+			  an error if more than 100ms has elapsed.
+			 */
+			PX4_INFO("signal strength read failed");
+
+			DEVICE_DEBUG("error reading signal strength from sensor: %d", ret);
+			perf_count(_comms_errors);
+
+			if (perf_event_count(_comms_errors) % 10 == 0) {
+				perf_count(_sensor_resets);
+				reset_sensor();
+			}
+		}
+
+		perf_end(_sample_perf);
+		// if we are getting lots of I2C transfer errors try
+		// resetting the sensor
+		return ret;
+	}
+
+	uint8_t ll40ls_signal_strength = val[0];
+
+
+	/* Absolute peak strength measurement, i.e. absolute strength of main signal peak*/
+	uint8_t peak_strength_reg = LL40LS_PEAK_STRENGTH_REG;
+	ret = lidar_transfer(&peak_strength_reg, 1, &val[0], 1);
+
+	// check if the transfer failed
+	if (ret < 0) {
+		if (hrt_absolute_time() - _acquire_time_usec > LL40LS_CONVERSION_TIMEOUT) {
+			/*
+			  NACKs from the sensor are expected when we
+			  read before it is ready, so only consider it
+			  an error if more than 100ms has elapsed.
+			 */
+			PX4_INFO("peak strenght read failed");
+
+			DEVICE_DEBUG("error reading peak strength from sensor: %d", ret);
+			perf_count(_comms_errors);
+
+			if (perf_event_count(_comms_errors) % 10 == 0) {
+				perf_count(_sensor_resets);
+				reset_sensor();
+			}
+		}
+
+		perf_end(_sample_perf);
+		// if we are getting lots of I2C transfer errors try
+		// resetting the sensor
+		return ret;
+	}
+
+	uint8_t ll40ls_peak_strength = val[0];
+
+	/* Final data quality evaluation. This is based on the datasheet and simple heuristics retrieved from experiments*/
+	// Step 1: Normalize signal strength to 0...100 percent using the absolute signal peak strength.
+	uint8_t signal_quality = 100 * math::max(ll40ls_peak_strength - LL40LS_PEAK_STRENGTH_LOW,
+				 0) / (LL40LS_PEAK_STRENGTH_HIGH - LL40LS_PEAK_STRENGTH_LOW);
+
+	// Step 2: Also use ll40ls_signal_strength (a relative measure, i.e. peak strength to noise!) to reject potentially ambiguous measurements
+	if (ll40ls_signal_strength <= LL40LS_SIGNAL_STRENGTH_LOW) { signal_quality = 0; }
+
+	// Step 3: Filter physically impossible measurements, which removes some crazy outliers that appear on LL40LS.
+	if (distance_m < LL40LS_MIN_DISTANCE) { signal_quality = 0; }
 
 	/* this should be fairly close to the end of the measurement, so the best approximation of the time */
 	report.timestamp = hrt_absolute_time();
@@ -446,11 +530,11 @@ int LidarLiteI2C::collect()
 	report.min_distance = get_minimum_distance();
 	report.max_distance = get_maximum_distance();
 	report.covariance = 0.0f;
-	/* the sensor is in fact a laser + sonar but there is no enum for this */
-	report.type = distance_sensor_s::MAV_DISTANCE_SENSOR_LASER;
+	report.signal_quality = signal_quality;
+	report.type =
+		distance_sensor_s::MAV_DISTANCE_SENSOR_LASER;		// the sensor is in fact a laser + sonar but there is no enum for this
 	report.orientation = _rotation;
-	/* TODO: set proper ID */
-	report.id = 0;
+	report.id = 0;	// TODO: set proper ID
 
 	/* publish it, if we are the primary */
 	if (_distance_sensor_topic != nullptr) {
@@ -497,7 +581,7 @@ void LidarLiteI2C::cycle()
 
 		/* try a collection */
 		if (OK != collect()) {
-			DEVICE_DEBUG("collection error");
+			PX4_DEBUG("collection error");
 
 			/* if we've been waiting more than 200ms then
 			   send a new acquire */
@@ -529,7 +613,7 @@ void LidarLiteI2C::cycle()
 	if (_collect_phase == false) {
 		/* measurement phase */
 		if (OK != measure()) {
-			DEVICE_DEBUG("measure error");
+			PX4_DEBUG("measure error");
 
 		} else {
 			/* next phase is collection. Don't switch to

@@ -35,10 +35,8 @@ px4_add_module(
 	MAIN teraranger
 	STACK_MAIN 1200
 	COMPILE_FLAGS
-		-Wno-sign-compare
 	SRCS
 		teraranger.cpp
 	DEPENDS
-		platforms__common
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix :
+

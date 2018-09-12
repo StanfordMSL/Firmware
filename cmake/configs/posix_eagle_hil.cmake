@@ -17,10 +17,9 @@ else()
 	set(QC_SOC_TARGET "APQ8074")
 endif()
 
+add_definitions(-DORB_COMMUNICATOR)
+
 set(config_module_list
-	drivers/device
-	drivers/boards
-	drivers/led
 	drivers/linux_sbus
 
 	systemcmds/param
@@ -28,24 +27,11 @@ set(config_module_list
 
 	modules/mavlink
 
-	modules/systemlib/param
-	modules/systemlib
-	modules/uORB
 	modules/sensors
 	modules/dataman
-	modules/sdlog2
 	modules/logger
 	modules/simulator
 	modules/commander
-
-	lib/controllib
-	lib/mathlib
-	lib/ecl
-	lib/geo
-	lib/geo_lookup
-	lib/conversion
-	lib/version
-	lib/DriverFramework/framework
 
 	modules/muorb/krait
 	)

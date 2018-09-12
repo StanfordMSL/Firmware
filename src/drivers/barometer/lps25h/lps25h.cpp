@@ -39,6 +39,8 @@
 
 #include <px4_config.h>
 
+#include <lib/cdev/CDev.hpp>
+#include <drivers/device/Device.hpp>
 #include <drivers/device/i2c.h>
 
 #include <sys/types.h>
@@ -60,7 +62,7 @@
 
 #include <board_config.h>
 
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
 #include <drivers/drv_baro.h>
@@ -191,7 +193,7 @@ enum LPS25H_BUS {
 # error This requires CONFIG_SCHED_WORKQUEUE.
 #endif
 
-class LPS25H : public device::CDev
+class LPS25H : public cdev::CDev
 {
 public:
 	LPS25H(device::Device *interface, const char *path);
@@ -208,26 +210,23 @@ public:
 	void			print_info();
 
 protected:
-	Device			*_interface;
+	device::Device			*_interface;
 
 private:
-	work_s			_work;
-	unsigned		_measure_ticks;
+	work_s			_work{};
+	unsigned		_measure_ticks{0};
 
-	ringbuffer::RingBuffer	*_reports;
-	bool			_collect_phase;
+	ringbuffer::RingBuffer	*_reports{nullptr};
+	bool			_collect_phase{false};
 
-	/* altitude conversion calibration */
-	unsigned		_msl_pressure;	/* in Pa */
-
-	orb_advert_t		_baro_topic;
-	int			_orb_class_instance;
-	int			_class_instance;
+	orb_advert_t		_baro_topic{nullptr};
+	int			_orb_class_instance{-1};
+	int			_class_instance{-1};
 
 	perf_counter_t		_sample_perf;
 	perf_counter_t		_comms_errors;
 
-	struct baro_report	_last_report;           /**< used for info() */
+	sensor_baro_s	_last_report{};           /**< used for info() */
 
 	/**
 	 * Initialise the automatic measurement state machine and start it.
@@ -246,17 +245,6 @@ private:
 	 * Reset the device
 	 */
 	int			reset();
-
-	/**
-	 * Perform the on-sensor scale calibration routine.
-	 *
-	 * @note The sensor will continue to provide measurements, these
-	 *	 will however reflect the uncalibrated sensor state until
-	 *	 the calibration routine has been completed.
-	 *
-	 * @param enable set to 1 to enable self-test strap, 0 to disable
-	 */
-	int			calibrate(struct file *filp, unsigned enable);
 
 	/**
 	 * Perform a poll cycle; collect from the previous measurement
@@ -323,31 +311,12 @@ extern "C" __EXPORT int lps25h_main(int argc, char *argv[]);
 
 
 LPS25H::LPS25H(device::Device *interface, const char *path) :
-	CDev("LPS25H", path),
+	CDev(path),
 	_interface(interface),
-	_work{},
-	_measure_ticks(0),
-	_reports(nullptr),
-	_collect_phase(false),
-	_msl_pressure(101325),
-	_baro_topic(nullptr),
-	_orb_class_instance(-1),
-	_class_instance(-1),
 	_sample_perf(perf_alloc(PC_ELAPSED, "lps25h_read")),
-	_comms_errors(perf_alloc(PC_COUNT, "lps25h_comms_errors")),
-	_last_report{0}
+	_comms_errors(perf_alloc(PC_COUNT, "lps25h_comms_errors"))
 {
-	// set the device type from the interface
-	_device_id.devid_s.bus_type = _interface->get_device_bus_type();
-	_device_id.devid_s.bus = _interface->get_device_bus();
-	_device_id.devid_s.address = _interface->get_device_address();
-	_device_id.devid_s.devtype = DRV_BARO_DEVTYPE_LPS25H;
-
-	// enable debug() calls
-	_debug_enabled = false;
-
-	// work_cancel in the dtor will explode if we don't do this...
-	memset(&_work, 0, sizeof(_work));
+	_interface->set_device_type(DRV_BARO_DEVTYPE_LPS25H);
 }
 
 LPS25H::~LPS25H()
@@ -378,7 +347,7 @@ LPS25H::init()
 	ret = CDev::init();
 
 	if (ret != OK) {
-		DEVICE_DEBUG("CDev init failed");
+		PX4_DEBUG("CDev init failed");
 		goto out;
 	}
 
@@ -386,7 +355,7 @@ LPS25H::init()
 	_reports = new ringbuffer::RingBuffer(2, sizeof(sensor_baro_s));
 
 	if (_reports == nullptr) {
-		DEVICE_DEBUG("can't get memory for reports");
+		PX4_DEBUG("can't get memory for reports");
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -555,19 +524,6 @@ LPS25H::ioctl(struct file *filp, int cmd, unsigned long arg)
 	case SENSORIOCRESET:
 		return reset();
 
-	case BAROIOCSMSLPRESSURE:
-
-		/* range-check for sanity */
-		if ((arg < 80000) || (arg > 120000)) {
-			return -EINVAL;
-		}
-
-		_msl_pressure = arg;
-		return OK;
-
-	case BAROIOCGMSLPRESSURE:
-		return _msl_pressure;
-
 	case DEVIOCGDEVICEID:
 		return _interface->ioctl(cmd, dummy);
 
@@ -633,7 +589,7 @@ LPS25H::cycle()
 
 		/* perform collection */
 		if (OK != collect()) {
-			DEVICE_DEBUG("collection error");
+			PX4_DEBUG("collection error");
 			/* restart the measurement state machine */
 			start();
 			return;
@@ -660,7 +616,7 @@ LPS25H::cycle()
 
 	/* measurement phase */
 	if (OK != measure()) {
-		DEVICE_DEBUG("measure error");
+		PX4_DEBUG("measure error");
 	}
 
 	/* next phase is collection */
@@ -729,36 +685,29 @@ LPS25H::collect()
 	}
 
 	/* get measurements from the device */
-	new_report.temperature = 42.5 + (report.t / 480);
+	new_report.temperature = 42.5f + (report.t / 480);
 
 	/* raw pressure */
 	uint32_t raw = report.p_xl + (report.p_l << 8) + (report.p_h << 16);
 
 	/* Pressure and MSL in mBar */
-	double p = raw / 4096.0;
-	double msl = _msl_pressure / 100.0;
-
-	double alt = (1.0 - pow(p / msl, 0.190263)) * 44330.8;
+	float p = raw / 4096.0f;
 
 	new_report.pressure = p;
-	new_report.altitude = alt;
 
 	/* get device ID */
-	new_report.device_id = _device_id.devid;
+	new_report.device_id = _interface->get_device_id();
 
-	if (!(_pub_blocked)) {
+	if (_baro_topic != nullptr) {
+		/* publish it */
+		orb_publish(ORB_ID(sensor_baro), _baro_topic, &new_report);
 
-		if (_baro_topic != nullptr) {
-			/* publish it */
-			orb_publish(ORB_ID(sensor_baro), _baro_topic, &new_report);
+	} else {
+		_baro_topic = orb_advertise_multi(ORB_ID(sensor_baro), &new_report,
+						  &_orb_class_instance, (sensor_is_onboard) ? ORB_PRIO_HIGH : ORB_PRIO_MAX);
 
-		} else {
-			_baro_topic = orb_advertise_multi(ORB_ID(sensor_baro), &new_report,
-							  &_orb_class_instance, (sensor_is_onboard) ? ORB_PRIO_HIGH : ORB_PRIO_MAX);
-
-			if (_baro_topic == nullptr) {
-				DEVICE_DEBUG("ADVERT FAIL");
-			}
+		if (_baro_topic == nullptr) {
+			PX4_DEBUG("ADVERT FAIL");
 		}
 	}
 
@@ -799,9 +748,7 @@ LPS25H::print_info()
 	perf_print_counter(_sample_perf);
 	perf_print_counter(_comms_errors);
 	printf("poll interval:  %u ticks\n", _measure_ticks);
-	printf("pressure    %.2f\n", (double)_last_report.pressure);
-	printf("altitude:    %.2f\n", (double)_last_report.altitude);
-	printf("temperature %.2f\n", (double)_last_report.temperature);
+	print_message(_last_report);
 
 	_reports->print_info("report queue");
 }
@@ -823,6 +770,12 @@ struct lps25h_bus_option {
 	LPS25H	*dev;
 } bus_options[] = {
 	{ LPS25H_BUS_I2C_EXTERNAL, "/dev/lps25h_ext", &LPS25H_I2C_interface, PX4_I2C_BUS_EXPANSION, NULL },
+#ifdef PX4_I2C_BUS_EXPANSION1
+	{ LPS25H_BUS_I2C_EXTERNAL, "/dev/lps25h_ext1", &LPS25H_I2C_interface, PX4_I2C_BUS_EXPANSION1, NULL },
+#endif
+#ifdef PX4_I2C_BUS_EXPANSION2
+	{ LPS25H_BUS_I2C_EXTERNAL, "/dev/lps25h_ext2", &LPS25H_I2C_interface, PX4_I2C_BUS_EXPANSION2, NULL },
+#endif
 #ifdef PX4_I2C_BUS_ONBOARD
 	{ LPS25H_BUS_I2C_INTERNAL, "/dev/lps25h_int", &LPS25H_I2C_interface, PX4_I2C_BUS_ONBOARD, NULL },
 #endif
@@ -838,7 +791,6 @@ struct lps25h_bus_option &find_bus(enum LPS25H_BUS busid);
 void	test(enum LPS25H_BUS busid);
 void	reset(enum LPS25H_BUS busid);
 void	info();
-void	calibrate(unsigned altitude, enum LPS25H_BUS busid);
 void	usage();
 
 /**
@@ -959,11 +911,7 @@ test(enum LPS25H_BUS busid)
 		err(1, "immediate read failed");
 	}
 
-	warnx("single read");
-	warnx("pressure:    %10.4f", (double)report.pressure);
-	warnx("altitude:    %11.4f", (double)report.altitude);
-	warnx("temperature: %8.4f", (double)report.temperature);
-	warnx("time:        %lld", report.timestamp);
+	print_message(report);
 
 	/* set the queue depth to 10 */
 	if (OK != ioctl(fd, SENSORIOCSQUEUEDEPTH, 10)) {
@@ -995,36 +943,11 @@ test(enum LPS25H_BUS busid)
 			err(1, "periodic read failed");
 		}
 
-		warnx("periodic read %u", i);
-		warnx("pressure:    %10.4f", (double)report.pressure);
-		warnx("altitude:    %11.4f", (double)report.altitude);
-		warnx("temperature K: %8.4f", (double)report.temperature);
-		warnx("time:        %lld", report.timestamp);
+		print_message(report);
 	}
 
 	close(fd);
 	errx(0, "PASS");
-}
-
-
-/**
- * Calculate actual MSL pressure given current altitude
- */
-void
-calibrate(unsigned altitude, enum LPS25H_BUS busid)
-{
-	struct lps25h_bus_option &bus = find_bus(busid);
-	const char *path = bus.devpath;
-
-	int fd = open(path, O_RDONLY);
-
-	if (fd < 0) {
-		err(1, "%s open failed (try 'lps25h start' if the driver is not running", path);
-	}
-
-	// TODO: Implement calibration
-
-	close(fd);
 }
 
 /**
@@ -1074,7 +997,7 @@ info()
 void
 usage()
 {
-	warnx("missing command: try 'start', 'info', 'test', 'reset', 'calibrate'");
+	warnx("missing command: try 'start', 'info', 'test', 'reset'");
 	warnx("options:");
 	warnx("    -X    (external I2C bus)");
 	warnx("    -I    (internal I2C bus)");
@@ -1141,19 +1064,6 @@ lps25h_main(int argc, char *argv[])
 	 */
 	if (!strcmp(verb, "info")) {
 		lps25h::info();
-	}
-
-	/*
-	 * Perform MSL pressure calibration given an altitude in metres
-	 */
-	if (!strcmp(verb, "calibrate")) {
-		if (argc < 2) {
-			errx(1, "missing altitude");
-		}
-
-		long altitude = strtol(argv[optind + 1], nullptr, 10);
-
-		lps25h::calibrate(altitude, busid);
 	}
 
 	errx(1, "unrecognised command, try 'start', 'test', 'reset' or 'info'");

@@ -78,10 +78,6 @@ LandingTargetEstimator::LandingTargetEstimator() :
 	_check_params(true);
 }
 
-LandingTargetEstimator::~LandingTargetEstimator()
-{
-}
-
 void LandingTargetEstimator::update()
 {
 	_check_params(false);
@@ -317,7 +313,7 @@ void LandingTargetEstimator::_update_params()
 	param_get(_paramHandle.meas_unc, &_params.meas_unc);
 	param_get(_paramHandle.pos_unc_init, &_params.pos_unc_init);
 	param_get(_paramHandle.vel_unc_init, &_params.vel_unc_init);
-	int mode = 0;
+	int32_t mode = 0;
 	param_get(_paramHandle.mode, &mode);
 	_params.mode = (TargetMode)mode;
 	param_get(_paramHandle.scale_x, &_params.scale_x);

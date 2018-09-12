@@ -69,10 +69,10 @@
 #include <drivers/drv_board_led.h>
 
 #include <systemlib/cpuload.h>
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
-#include <systemlib/param/param.h>
+#include <parameters/param.h>
 
 /****************************************************************************
  * Pre-Processor Definitions
@@ -150,6 +150,9 @@ __EXPORT void board_peripheral_reset(int ms)
 __EXPORT void
 stm32_boardinitialize(void)
 {
+	/* configure LEDs */
+	board_autoled_initialize();
+
 	/* configure ADC pins */
 
 	stm32_configgpio(GPIO_ADC1_IN10);	/* used by battery sense */
@@ -163,11 +166,14 @@ stm32_boardinitialize(void)
 	/* configure spektrum power controller gpio */
 	stm32_configgpio(GPIO_SPEKTRUM_PWR_EN);
 
+	/* configure CAN interface */
+
+	stm32_configgpio(GPIO_CAN1_RX);
+	stm32_configgpio(GPIO_CAN1_TX);
+
 	/* configure SPI interfaces */
 	stm32_spiinitialize();
 
-	/* configure LEDs */
-	board_autoled_initialize();
 }
 
 /****************************************************************************

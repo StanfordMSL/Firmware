@@ -35,10 +35,8 @@ px4_add_module(
 	MODULE drivers__sf1xx
 	MAIN sf1xx
 	COMPILE_FLAGS
-		-Wno-sign-compare
 	SRCS
 		sf1xx.cpp
 	DEPENDS
-		platforms__common
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix :
+

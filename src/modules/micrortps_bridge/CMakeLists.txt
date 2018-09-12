@@ -41,7 +41,13 @@ if(NOT FASTRTPSGEN)
 endif()
 
 set(config_rtps_send_topics
-   sensor_combined
+	sensor_combined
+	sensor_baro
+	sensor_selection
+	vehicle_gps_position
+	airspeed
+	vehicle_land_detected
+	vehicle_status
    )
 
 set(config_rtps_receive_topics
@@ -54,6 +60,9 @@ if (FASTRTPSGEN AND (config_rtps_send_topics OR config_rtps_receive_topics))
 endif()
 
 if (GENERATE_RTPS_BRIDGE)
+
+	# temporarily set to OFF
+	option(CHECK_ENDIANNESS OFF)
 
 	add_subdirectory(micrortps_client)
 
@@ -71,6 +80,7 @@ if (GENERATE_RTPS_BRIDGE)
 	set(uorb_sources_microcdr)
 
 	# send topic files
+	message(STATUS "RTPS send: ${config_rtps_send_topics}")
 	set(send_topic_files)
 	foreach(topic ${config_rtps_send_topics})
 		list(APPEND send_topic_files ${PX4_SOURCE_DIR}/msg/${topic}.msg)
@@ -104,7 +114,7 @@ if (GENERATE_RTPS_BRIDGE)
 		WORKING_DIRECTORY ${PX4_SOURCE_DIR}/msg/
 		VERBATIM
 		)
-	add_custom_target(uorb_headers_microcdr DEPENDS ${uorb_headers_microcdr})
+	add_custom_target(uorb_headers_microcdr_gen DEPENDS ${uorb_headers_microcdr})
 
 	# Generate uORB serialization sources
 	add_custom_command(OUTPUT ${uorb_sources_microcdr}
@@ -122,14 +132,19 @@ if (GENERATE_RTPS_BRIDGE)
 		VERBATIM
 		)
 	px4_add_library(uorb_msgs_microcdr ${uorb_sources_microcdr})
-	add_dependencies(uorb_msgs_microcdr uorb_headers_microcdr uorb_headers uorb_msgs git_micro_cdr lib__micro-CDR)
-
-	target_link_libraries(uorb_msgs_microcdr PRIVATE lib__micro-CDR)
+	add_dependencies(uorb_msgs_microcdr
+		uorb_headers_microcdr_gen
+		git_micro_cdr
+		microcdr
+	)
 
 	# microCDR
 	target_include_directories(uorb_msgs_microcdr
 		PUBLIC
 			${CMAKE_CURRENT_SOURCE_DIR}/micro-CDR/include
+			${CMAKE_CURRENT_BINARY_DIR}/micro-CDR/include
 			${CMAKE_CURRENT_BINARY_DIR}/micro-CDR/include/microcdr
 	)
+
+	target_link_libraries(uorb_msgs_microcdr PRIVATE microcdr)
 endif()

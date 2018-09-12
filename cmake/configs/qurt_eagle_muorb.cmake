@@ -6,6 +6,7 @@ else()
 endif()
 
 set(DISABLE_PARAMS_MODULE_SCOPING TRUE)
+add_definitions(-DORB_COMMUNICATOR)
 
 # Get $QC_SOC_TARGET from environment if existing.
 if (DEFINED ENV{QC_SOC_TARGET})
@@ -20,7 +21,6 @@ include(qurt_flags)
 include_directories(${HEXAGON_SDK_INCLUDES})
 
 set(config_module_list
-	drivers/device
 
 	#
 	# System commands
@@ -30,19 +30,6 @@ set(config_module_list
 	#
 	# Library modules
 	#
-	modules/systemlib/param
-	modules/systemlib
-	modules/uORB
-
-	#
-	# Libraries
-	#
-	lib/mathlib
-	lib/geo
-	lib/geo_lookup
-	lib/conversion
-	lib/version
-	lib/DriverFramework/framework
 
 	#
 	# sources for muorb over fastrpc

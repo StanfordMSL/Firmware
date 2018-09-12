@@ -84,8 +84,6 @@
 #define PX4_I2C_BUS_EXPANSION1  2
 #define PX4_I2C_BUS_ONBOARD	3
 
-#define PX4_I2C_OBDEV_HMC5883	0x1e
-
 #define GPIO_SPI_CS_MPU6500	(GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_2MHz|GPIO_OUTPUT_SET|GPIO_PORTA|GPIO_PIN4)
 #define PX4_SPI_BUS_SENSORS	1
 #define PX4_SPIDEV_MPU		PX4_MK_SPI_SEL(PX4_SPI_BUS_SENSORS, 1)
@@ -126,10 +124,7 @@
 /*
  * RC Serial port
  */
-#define RC_SERIAL_PORT		"/dev/ttyS2"
-/* No invert support */
-#define INVERT_RC_INPUT(_invert_true)		while(0)
-
+#define RC_SERIAL_PORT		"/dev/ttyS2" /* No HW invert support */
 /*
  * High-resolution timer
  */
@@ -144,8 +139,6 @@
 /*
  * ESCs do not respond
  */
-#define BOARD_TAP_ESC_NO_VERIFY_CONFIG 1
-
 #define BOARD_TAP_ESC_MODE 1
 
 #define MEMORY_CONSTRAINED_SYSTEM

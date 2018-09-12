@@ -41,8 +41,8 @@
 #include "land.h"
 #include "navigator.h"
 
-Land::Land(Navigator *navigator, const char *name) :
-	MissionBlock(navigator, name)
+Land::Land(Navigator *navigator) :
+	MissionBlock(navigator)
 {
 }
 
@@ -80,7 +80,7 @@ Land::on_active()
 	}
 
 
-	if (is_mission_item_reached() && !_navigator->get_mission_result()->finished) {
+	if (_navigator->get_land_detected()->landed) {
 		_navigator->get_mission_result()->finished = true;
 		_navigator->set_mission_result_updated();
 		set_idle_item(&_mission_item);

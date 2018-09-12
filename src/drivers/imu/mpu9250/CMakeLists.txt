@@ -33,7 +33,7 @@
 px4_add_module(
 	MODULE drivers__mpu9250
 	MAIN mpu9250
-	STACK_MAIN 1200
+	STACK_MAIN 1500
 	COMPILE_FLAGS
 	SRCS
 		mpu9250.cpp
@@ -44,6 +44,5 @@ px4_add_module(
 		mag.cpp
 		mag_i2c.cpp
 	DEPENDS
-		platforms__common
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix :
+

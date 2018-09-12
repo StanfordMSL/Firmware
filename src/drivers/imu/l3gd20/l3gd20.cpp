@@ -41,6 +41,7 @@
 
 #include <px4_config.h>
 #include <px4_defines.h>
+#include <px4_getopt.h>
 
 #include <sys/types.h>
 #include <stdint.h>
@@ -55,9 +56,8 @@
 #include <stdio.h>
 #include <math.h>
 #include <unistd.h>
-#include <getopt.h>
 
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
 #include <nuttx/arch.h>
@@ -685,9 +685,6 @@ L3GD20::ioctl(struct file *filp, int cmd, unsigned long arg)
 		/* convert to dps and round */
 		return (unsigned long)(_gyro_range_rad_s * 180.0f / M_PI_F + 0.5f);
 
-	case GYROIOCSELFTEST:
-		return self_test();
-
 	default:
 		/* give it to the superclass */
 		return SPI::ioctl(filp, cmd, arg);
@@ -1015,8 +1012,6 @@ L3GD20::measure()
 
 	report.z_raw = raw_report.z;
 
-	report.temperature_raw = raw_report.temp;
-
 	float xraw_f = report.x_raw;
 	float yraw_f = report.y_raw;
 	float zraw_f = report.z_raw;
@@ -1032,8 +1027,8 @@ L3GD20::measure()
 	report.y = _gyro_filter_y.apply(yin);
 	report.z = _gyro_filter_z.apply(zin);
 
-	math::Vector<3> gval(xin, yin, zin);
-	math::Vector<3> gval_integrated;
+	matrix::Vector3f gval(xin, yin, zin);
+	matrix::Vector3f gval_integrated;
 
 	bool gyro_notify = _gyro_int.put(report.timestamp, gval, gval_integrated, report.integral_dt);
 	report.x_integral = gval_integrated(0);
@@ -1043,7 +1038,6 @@ L3GD20::measure()
 	report.temperature = L3GD20_TEMP_OFFSET_CELSIUS - raw_report.temp;
 
 	report.scaling = _gyro_range_scale;
-	report.range_rad_s = _gyro_range_rad_s;
 
 	/* return device ID */
 	report.device_id = _device_id.devid;
@@ -1251,16 +1245,7 @@ test()
 		err(1, "immediate gyro read failed");
 	}
 
-	warnx("gyro x: \t% 9.5f\trad/s", (double)g_report.x);
-	warnx("gyro y: \t% 9.5f\trad/s", (double)g_report.y);
-	warnx("gyro z: \t% 9.5f\trad/s", (double)g_report.z);
-	warnx("temp: \t%d\tC", (int)g_report.temperature);
-	warnx("gyro x: \t%d\traw", (int)g_report.x_raw);
-	warnx("gyro y: \t%d\traw", (int)g_report.y_raw);
-	warnx("gyro z: \t%d\traw", (int)g_report.z_raw);
-	warnx("temp: \t%d\traw", (int)g_report.temperature_raw);
-	warnx("gyro range: %8.4f rad/s (%d deg/s)", (double)g_report.range_rad_s,
-	      (int)((g_report.range_rad_s / M_PI_F) * 180.0f + 0.5f));
+	print_message(g_report);
 
 	if (ioctl(fd_gyro, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
 		err(1, "reset to default polling");
@@ -1359,28 +1344,34 @@ usage()
 int
 l3gd20_main(int argc, char *argv[])
 {
-	bool external_bus = false;
+	int myoptind = 1;
 	int ch;
+	const char *myoptarg = nullptr;
+	bool external_bus = false;
 	enum Rotation rotation = ROTATION_NONE;
 
-	/* jump over start/off/etc and look at options first */
-	while ((ch = getopt(argc, argv, "XR:")) != EOF) {
+	while ((ch = px4_getopt(argc, argv, "XR:", &myoptind, &myoptarg)) != EOF) {
 		switch (ch) {
 		case 'X':
 			external_bus = true;
 			break;
 
 		case 'R':
-			rotation = (enum Rotation)atoi(optarg);
+			rotation = (enum Rotation)atoi(myoptarg);
 			break;
 
 		default:
 			l3gd20::usage();
-			exit(0);
+			return 0;
 		}
 	}
 
-	const char *verb = argv[optind];
+	if (myoptind >= argc) {
+		l3gd20::usage();
+		return -1;
+	}
+
+	const char *verb = argv[myoptind];
 
 	/*
 	 * Start/load the driver.
@@ -1425,5 +1416,6 @@ l3gd20_main(int argc, char *argv[])
 		l3gd20::test_error();
 	}
 
-	errx(1, "unrecognized command, try 'start', 'test', 'reset', 'info', 'testerror' or 'regdump'");
+	PX4_ERR("unrecognized command, try 'start', 'test', 'reset', 'info', 'testerror' or 'regdump'");
+	return -1;
 }

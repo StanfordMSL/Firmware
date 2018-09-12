@@ -120,17 +120,18 @@ endif
 # --------------------------------------------------------------------
 # describe how to build a cmake config
 define cmake-build
-+@$(eval BUILD_DIR = $(SRC_DIR)/build/$@$(BUILD_DIR_SUFFIX))
++@$(eval PX4_CONFIG = $(1))
++@$(eval BUILD_DIR = $(SRC_DIR)/build/$(PX4_CONFIG)$(BUILD_DIR_SUFFIX))
 +@if [ $(PX4_CMAKE_GENERATOR) = "Ninja" ] && [ -e $(BUILD_DIR)/Makefile ]; then rm -rf $(BUILD_DIR); fi
-+@if [ ! -e $(BUILD_DIR)/CMakeCache.txt ]; then mkdir -p $(BUILD_DIR) && cd $(BUILD_DIR) && cmake $(2) -G"$(PX4_CMAKE_GENERATOR)" $(CMAKE_ARGS) -DCONFIG=$(1) || (rm -rf $(BUILD_DIR)); fi
-+@(cd $(BUILD_DIR) && $(PX4_MAKE) $(PX4_MAKE_ARGS) $(ARGS))
++@if [ ! -e $(BUILD_DIR)/CMakeCache.txt ]; then mkdir -p $(BUILD_DIR) && cd $(BUILD_DIR) && cmake $(SRC_DIR) -G"$(PX4_CMAKE_GENERATOR)" $(CMAKE_ARGS) -DCONFIG=$(PX4_CONFIG) || (rm -rf $(BUILD_DIR)); fi
++@$(PX4_MAKE) -C $(BUILD_DIR) $(PX4_MAKE_ARGS) $(ARGS)
 endef
 
-COLOR_BLUE = \033[0;34m
+COLOR_BLUE = \033[0;94m
 NO_COLOR   = \033[m
 
 define colorecho
-+@echo "${COLOR_BLUE}${1} ${NO_COLOR}"
++@echo -e '${COLOR_BLUE}${1} ${NO_COLOR}'
 endef
 
 # Get a list of all config targets cmake/configs/*.cmake
@@ -144,13 +145,13 @@ NUTTX_CONFIG_TARGETS := $(patsubst nuttx_%,%,$(filter nuttx_%,$(ALL_CONFIG_TARGE
 
 # All targets.
 $(ALL_CONFIG_TARGETS):
-	$(call cmake-build,$@,$(SRC_DIR))
+	$(call cmake-build,$@)
 
 # Abbreviated config targets.
 
 # nuttx_ is left off by default; provide a rule to allow that.
 $(NUTTX_CONFIG_TARGETS):
-	$(call cmake-build,nuttx_$@,$(SRC_DIR))
+	$(call cmake-build,nuttx_$@)
 
 all_nuttx_targets: $(NUTTX_CONFIG_TARGETS)
 
@@ -231,7 +232,7 @@ quick_check: check_posix_sitl_default check_px4fmu-v4pro_default tests check_for
 
 check_%:
 	@echo
-	$(call colorecho,"Building" $(subst check_,,$@))
+	$(call colorecho,'Building' $(subst check_,,$@))
 	@$(MAKE) --no-print-directory $(subst check_,,$@)
 	@echo
 
@@ -249,37 +250,41 @@ coverity_scan: posix_sitl_default
 
 # Documentation
 # --------------------------------------------------------------------
-.PHONY: parameters_metadata airframe_metadata module_documentation px4_metadata
+.PHONY: parameters_metadata airframe_metadata module_documentation px4_metadata doxygen
 
 parameters_metadata:
-	@python $(SRC_DIR)/src/modules/systemlib/param/px_process_params.py -s `find $(SRC_DIR)/src -maxdepth 4 -type d` --inject-xml $(SRC_DIR)/src/modules/systemlib/param/parameters_injected.xml --markdown
-	@python $(SRC_DIR)/src/modules/systemlib/param/px_process_params.py -s `find $(SRC_DIR)/src -maxdepth 4 -type d` --inject-xml $(SRC_DIR)/src/modules/systemlib/param/parameters_injected.xml --xml
+	@$(MAKE) --no-print-directory posix_sitl_default metadata_parameters
 
 airframe_metadata:
-	@python $(SRC_DIR)/Tools/px_process_airframes.py -v -a $(SRC_DIR)/ROMFS/px4fmu_common/init.d --markdown
-	@python $(SRC_DIR)/Tools/px_process_airframes.py -v -a $(SRC_DIR)/ROMFS/px4fmu_common/init.d --xml
+	@$(MAKE) --no-print-directory posix_sitl_default metadata_airframes
 
 module_documentation:
-	@python $(SRC_DIR)/Tools/px_process_module_doc.py -v --markdown $(SRC_DIR)/modules --src-path $(SRC_DIR)/src
+	@$(MAKE) --no-print-directory posix_sitl_default metadata_module_documentation
 
 px4_metadata: parameters_metadata airframe_metadata module_documentation
+
+doxygen:
+	@mkdir -p $(SRC_DIR)/build/doxygen
+	@cd $(SRC_DIR)/build/doxygen && cmake $(SRC_DIR) $(CMAKE_ARGS) -G"$(PX4_CMAKE_GENERATOR)" -DCONFIG=posix_sitl_default -DBUILD_DOXYGEN=ON
+	@$(PX4_MAKE) -C $(SRC_DIR)/build/doxygen
+	@touch $(SRC_DIR)/build/doxygen/Documentation/.nojekyll
 
 # Astyle
 # --------------------------------------------------------------------
 .PHONY: check_format format
 
 check_format:
-	$(call colorecho,"Checking formatting with astyle")
+	$(call colorecho,'Checking formatting with astyle')
 	@$(SRC_DIR)/Tools/astyle/check_code_style_all.sh
 	@cd $(SRC_DIR) && git diff --check
 
 format:
-	$(call colorecho,"Formatting with astyle")
+	$(call colorecho,'Formatting with astyle')
 	@$(SRC_DIR)/Tools/astyle/check_code_style_all.sh --fix
 
 # Testing
 # --------------------------------------------------------------------
-.PHONY: tests tests_coverage tests_mission tests_offboard rostest
+.PHONY: tests tests_coverage tests_mission tests_mission_coverage tests_offboard rostest python_coverage
 
 tests:
 	@$(MAKE) --no-print-directory posix_sitl_default test_results \
@@ -288,11 +293,6 @@ tests:
 
 tests_coverage:
 	@$(MAKE) clean
-	@$(MAKE) --no-print-directory posix_sitl_default PX4_CMAKE_BUILD_TYPE=Coverage
-	@$(MAKE) --no-print-directory posix_sitl_default sitl_gazebo PX4_CMAKE_BUILD_TYPE=Coverage
-	@$(SRC_DIR)/test/rostest_px4_run.sh mavros_posix_tests_missions.test
-	@$(SRC_DIR)/test/rostest_px4_run.sh mavros_posix_tests_offboard_attctl.test
-	@$(SRC_DIR)/test/rostest_px4_run.sh mavros_posix_tests_offboard_posctl.test
 	@$(MAKE) --no-print-directory posix_sitl_default test_coverage_genhtml PX4_CMAKE_BUILD_TYPE=Coverage
 	@echo "Open $(SRC_DIR)/build/posix_sitl_default/coverage-html/index.html to see coverage"
 
@@ -302,13 +302,30 @@ rostest: posix_sitl_default
 tests_mission: rostest
 	@$(SRC_DIR)/test/rostest_px4_run.sh mavros_posix_tests_missions.test
 
+tests_mission_coverage:
+	@$(MAKE) clean
+	@$(MAKE) --no-print-directory posix_sitl_default PX4_CMAKE_BUILD_TYPE=Coverage
+	@$(MAKE) --no-print-directory posix_sitl_default sitl_gazebo PX4_CMAKE_BUILD_TYPE=Coverage
+	@$(SRC_DIR)/test/rostest_px4_run.sh mavros_posix_test_mission.test mission:=VTOL_mission_1 vehicle:=standard_vtol
+	@$(MAKE) --no-print-directory posix_sitl_default generate_coverage
+
 tests_offboard: rostest
 	@$(SRC_DIR)/test/rostest_px4_run.sh mavros_posix_tests_offboard_attctl.test
 	@$(SRC_DIR)/test/rostest_px4_run.sh mavros_posix_tests_offboard_posctl.test
 
+python_coverage:
+	@mkdir -p $(SRC_DIR)/build/python_coverage
+	@cd $(SRC_DIR)/build/python_coverage && cmake $(SRC_DIR) $(CMAKE_ARGS) -G"$(PX4_CMAKE_GENERATOR)" -DCONFIG=posix_sitl_default -DPYTHON_COVERAGE=ON
+	@$(PX4_MAKE) -C $(SRC_DIR)/build/python_coverage
+	@$(PX4_MAKE) -C $(SRC_DIR)/build/python_coverage metadata_airframes
+	@$(PX4_MAKE) -C $(SRC_DIR)/build/python_coverage metadata_parameters
+	#@$(PX4_MAKE) -C $(SRC_DIR)/build/python_coverage module_documentation # TODO: fix within coverage.py
+	@coverage combine `find . -name .coverage\*`
+	@coverage report -m
+
 # static analyzers (scan-build, clang-tidy, cppcheck)
 # --------------------------------------------------------------------
-.PHONY: scan-build posix_sitl_default-clang clang-tidy clang-tidy-fix clang-tidy-quiet cppcheck check_stack
+.PHONY: scan-build posix_sitl_default-clang clang-tidy clang-tidy-fix clang-tidy-quiet cppcheck shellcheck_all
 
 scan-build:
 	@export CCC_CC=clang
@@ -343,15 +360,9 @@ cppcheck: posix_sitl_default
 	@cppcheck -i$(SRC_DIR)/src/examples --enable=performance --std=c++11 --std=c99 --std=posix --project=$(SRC_DIR)/build/posix_sitl_default/compile_commands.json --xml-version=2 2> $(SRC_DIR)/build/cppcheck/cppcheck-result.xml > /dev/null
 	@cppcheck-htmlreport --source-encoding=ascii --file=$(SRC_DIR)/build/cppcheck/cppcheck-result.xml --report-dir=$(SRC_DIR)/build/cppcheck --source-dir=$(SRC_DIR)/src/
 
-check_stack: px4fmu-v4pro_default
-	@echo "Checking worst case stack usage with checkstack.pl ..."
-	@echo " "
-	@echo "Top 10:"
-	@cd $(SRC_DIR)/build/px4fmu-v4pro_default && mkdir -p stack_usage && arm-none-eabi-objdump -d nuttx_px4fmu-v4pro_default.elf | $(SRC_DIR)/Tools/stack_usage/checkstack.pl arm 0 > stack_usage/checkstack_output.txt 2> stack_usage/checkstack_errors.txt
-	@head -n 10 $(SRC_DIR)/build/px4fmu-v4pro_default/stack_usage/checkstack_output.txt | c++filt
-	@echo " "
-	@echo "Symbols with 'main', 'thread' or 'task':"
-	@cat $(SRC_DIR)/build/px4fmu-v4pro_default/stack_usage/checkstack_output.txt | c++filt | grep -E 'thread|main|task'
+shellcheck_all:
+	@$(SRC_DIR)/Tools/run-shellcheck.sh $(SRC_DIR)/ROMFS/px4fmu_common/
+	@make px4fmu-v2_default shellcheck
 
 # Cleanup
 # --------------------------------------------------------------------

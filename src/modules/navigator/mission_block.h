@@ -38,14 +38,11 @@
  * @author Julian Oes <julian@oes.ch>
  */
 
-#ifndef NAVIGATOR_MISSION_BLOCK_H
-#define NAVIGATOR_MISSION_BLOCK_H
+#pragma once
 
 #include "navigator_mode.h"
 #include "navigation.h"
 
-#include <controllib/blocks.hpp>
-#include <controllib/block/BlockParam.hpp>
 #include <drivers/drv_hrt.h>
 #include <systemlib/mavlink_log.h>
 #include <uORB/topics/mission.h>
@@ -62,7 +59,7 @@ public:
 	/**
 	 * Constructor
 	 */
-	MissionBlock(Navigator *navigator, const char *name);
+	MissionBlock(Navigator *navigator);
 	virtual ~MissionBlock() = default;
 
 	MissionBlock(const MissionBlock &) = delete;
@@ -111,6 +108,11 @@ protected:
 	void set_idle_item(struct mission_item_s *item);
 
 	/**
+	 * Set vtol transition item
+	 */
+	void set_vtol_transition_item(struct mission_item_s *item, const uint8_t new_mode);
+
+	/**
 	 * General function used to adjust the mission item based on vehicle specific limitations
 	 */
 	void	mission_apply_limitation(mission_item_s &item);
@@ -118,6 +120,8 @@ protected:
 	void issue_command(const mission_item_s &item);
 
 	float get_time_inside(const struct mission_item_s &item);
+
+	float get_absolute_altitude_for_item(struct mission_item_s &mission_item) const;
 
 	mission_item_s _mission_item{};
 
@@ -130,5 +134,3 @@ protected:
 
 	orb_advert_t    _actuator_pub{nullptr};
 };
-
-#endif

@@ -74,13 +74,12 @@
 
 #include <systemlib/px4_macros.h>
 #include <systemlib/cpuload.h>
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
 #include <systemlib/hardfault_log.h>
 
-#include <systemlib/systemlib.h>
-#include <systemlib/param/param.h>
+#include <parameters/param.h>
 
 #include "up_internal.h"
 /****************************************************************************
@@ -175,6 +174,16 @@ stm32_boardinitialize(void)
 	stm32_configgpio(GPIO_ADC1_IN3);	/* BATT_CURRENT_SENS */
 	stm32_configgpio(GPIO_ADC1_IN4);	/* VDD_5V_SENS */
 	stm32_configgpio(GPIO_ADC1_IN11);	/* RSSI analog in */
+
+	/* configure CAN interface */
+#if defined(GPIO_CAN1_RX)
+	stm32_configgpio(GPIO_CAN1_RX);
+	stm32_configgpio(GPIO_CAN1_TX);
+#endif
+	stm32_configgpio(GPIO_CAN2_RX);
+	stm32_configgpio(GPIO_CAN2_TX);
+	stm32_configgpio(GPIO_CAN3_RX);
+	stm32_configgpio(GPIO_CAN3_TX);
 
 	/* configure power supply control/sense pins */
 	stm32_configgpio(GPIO_PERIPH_3V3_EN);

@@ -1,6 +1,6 @@
 #include "bmi160.hpp"
 #include "bmi160_gyro.hpp"
-
+#include <ecl/geo/geo.h>
 
 /*
   list of registers that will be checked in check_registers(). Note
@@ -46,7 +46,6 @@ BMI160::BMI160(int bus, const char *path_accel, const char *path_gyro, uint32_t 
 	_good_transfers(perf_alloc(PC_COUNT, "bmi160_good_transfers")),
 	_reset_retries(perf_alloc(PC_COUNT, "bmi160_reset_retries")),
 	_duplicates(perf_alloc(PC_COUNT, "bmi160_duplicates")),
-	_controller_latency_perf(perf_alloc_once(PC_ELAPSED, "ctrl_latency")),
 	_register_wait(0),
 	_reset_wait(0),
 	_accel_filter_x(BMI160_ACCEL_DEFAULT_RATE, BMI160_ACCEL_DEFAULT_DRIVER_FILTER_FREQ),
@@ -493,63 +492,6 @@ BMI160::self_test()
 	return (perf_event_count(_sample_perf) > 0) ? 0 : 1;
 }
 
-int
-BMI160::accel_self_test()
-{
-	if (self_test()) {
-		return 1;
-	}
-
-	return 0;
-}
-
-int
-BMI160::gyro_self_test()
-{
-	if (self_test()) {
-		return 1;
-	}
-
-	/*
-	 * Maximum deviation of 10 degrees
-	 */
-	const float max_offset = (float)(10 * M_PI_F / 180.0f);
-	/* 30% scale error is chosen to catch completely faulty units but
-	 * to let some slight scale error pass. Requires a rate table or correlation
-	 * with mag rotations + data fit to
-	 * calibrate properly and is not done by default.
-	 */
-	const float max_scale = 0.3f;
-
-	/* evaluate gyro offsets, complain if offset -> zero or larger than 30 dps. */
-	if (fabsf(_gyro_scale.x_offset) > max_offset) {
-		return 1;
-	}
-
-	/* evaluate gyro scale, complain if off by more than 30% */
-	if (fabsf(_gyro_scale.x_scale - 1.0f) > max_scale) {
-		return 1;
-	}
-
-	if (fabsf(_gyro_scale.y_offset) > max_offset) {
-		return 1;
-	}
-
-	if (fabsf(_gyro_scale.y_scale - 1.0f) > max_scale) {
-		return 1;
-	}
-
-	if (fabsf(_gyro_scale.z_offset) > max_offset) {
-		return 1;
-	}
-
-	if (fabsf(_gyro_scale.z_scale - 1.0f) > max_scale) {
-		return 1;
-	}
-
-	return 0;
-}
-
 /*
   deliberately trigger an error in the sensor to trigger recovery
  */
@@ -655,14 +597,12 @@ BMI160::ioctl(struct file *filp, int cmd, unsigned long arg)
 					// adjust filters
 					float cutoff_freq_hz = _accel_filter_x.get_cutoff_freq();
 					float sample_rate = 1.0e6f / ticks;
-					_set_dlpf_filter(cutoff_freq_hz);
 					_accel_filter_x.set_cutoff_frequency(sample_rate, cutoff_freq_hz);
 					_accel_filter_y.set_cutoff_frequency(sample_rate, cutoff_freq_hz);
 					_accel_filter_z.set_cutoff_frequency(sample_rate, cutoff_freq_hz);
 
 
 					float cutoff_freq_hz_gyro = _gyro_filter_x.get_cutoff_freq();
-					_set_dlpf_filter(cutoff_freq_hz_gyro);
 					_gyro_filter_x.set_cutoff_frequency(sample_rate, cutoff_freq_hz_gyro);
 					_gyro_filter_y.set_cutoff_frequency(sample_rate, cutoff_freq_hz_gyro);
 					_gyro_filter_z.set_cutoff_frequency(sample_rate, cutoff_freq_hz_gyro);
@@ -743,10 +683,7 @@ BMI160::ioctl(struct file *filp, int cmd, unsigned long arg)
 		return set_accel_range(arg);
 
 	case ACCELIOCGRANGE:
-		return (unsigned long)((_accel_range_m_s2) / BMI160_ONE_G + 0.5f);
-
-	case ACCELIOCSELFTEST:
-		return accel_self_test();
+		return (unsigned long)((_accel_range_m_s2) / CONSTANTS_ONE_G + 0.5f);
 
 	default:
 		/* give it to the superclass */
@@ -804,9 +741,6 @@ BMI160::gyro_ioctl(struct file *filp, int cmd, unsigned long arg)
 
 	case GYROIOCGRANGE:
 		return (unsigned long)(_gyro_range_rad_s * 180.0f / M_PI_F + 0.5f);
-
-	case GYROIOCSELFTEST:
-		return gyro_self_test();
 
 	default:
 		/* give it to the superclass */
@@ -905,8 +839,8 @@ BMI160::set_accel_range(unsigned max_g)
 		return -EINVAL;
 	}
 
-	_accel_range_scale = (BMI160_ONE_G / lsb_per_g);
-	_accel_range_m_s2 = max_accel_g * BMI160_ONE_G;
+	_accel_range_scale = (CONSTANTS_ONE_G / lsb_per_g);
+	_accel_range_m_s2 = max_accel_g * CONSTANTS_ONE_G;
 
 	modify_reg(BMIREG_ACC_RANGE, clearbits, setbits);
 
@@ -1180,8 +1114,8 @@ BMI160::measure()
 	arb.y = _accel_filter_y.apply(y_in_new);
 	arb.z = _accel_filter_z.apply(z_in_new);
 
-	math::Vector<3> aval(x_in_new, y_in_new, z_in_new);
-	math::Vector<3> aval_integrated;
+	matrix::Vector3f aval(x_in_new, y_in_new, z_in_new);
+	matrix::Vector3f aval_integrated;
 
 	bool accel_notify = _accel_int.put(arb.timestamp, aval, aval_integrated, arb.integral_dt);
 	arb.x_integral = aval_integrated(0);
@@ -1189,11 +1123,9 @@ BMI160::measure()
 	arb.z_integral = aval_integrated(2);
 
 	arb.scaling = _accel_range_scale;
-	arb.range_m_s2 = _accel_range_m_s2;
 
 	_last_temperature = 23 + report.temp * 1.0f / 512.0f;
 
-	arb.temperature_raw = report.temp;
 	arb.temperature = _last_temperature;
 
 	/* return device ID */
@@ -1218,8 +1150,8 @@ BMI160::measure()
 	grb.y = _gyro_filter_y.apply(y_gyro_in_new);
 	grb.z = _gyro_filter_z.apply(z_gyro_in_new);
 
-	math::Vector<3> gval(x_gyro_in_new, y_gyro_in_new, z_gyro_in_new);
-	math::Vector<3> gval_integrated;
+	matrix::Vector3f gval(x_gyro_in_new, y_gyro_in_new, z_gyro_in_new);
+	matrix::Vector3f gval_integrated;
 
 	bool gyro_notify = _gyro_int.put(arb.timestamp, gval, gval_integrated, grb.integral_dt);
 	grb.x_integral = gval_integrated(0);
@@ -1227,9 +1159,7 @@ BMI160::measure()
 	grb.z_integral = gval_integrated(2);
 
 	grb.scaling = _gyro_range_scale;
-	grb.range_rad_s = _gyro_range_rad_s;
 
-	grb.temperature_raw = report.temp;
 	grb.temperature = _last_temperature;
 
 	/* return device ID */
@@ -1248,8 +1178,6 @@ BMI160::measure()
 	}
 
 	if (accel_notify && !(_pub_blocked)) {
-		/* log the time of this report */
-		perf_begin(_controller_latency_perf);
 		/* publish it */
 		orb_publish(ORB_ID(sensor_accel), _accel_topic, &arb);
 	}

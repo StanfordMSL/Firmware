@@ -51,9 +51,9 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
-#include <getopt.h>
+#include <px4_getopt.h>
 
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
 #include <systemlib/conversions.h>
 
@@ -74,9 +74,22 @@
 #define MPU_DEVICE_PATH_ACCEL		"/dev/mpu9250_accel"
 #define MPU_DEVICE_PATH_GYRO		"/dev/mpu9250_gyro"
 #define MPU_DEVICE_PATH_MAG		"/dev/mpu9250_mag"
+
+#define MPU_DEVICE_PATH_ACCEL_1		"/dev/mpu9250_accel1"
+#define MPU_DEVICE_PATH_GYRO_1		"/dev/mpu9250_gyro1"
+#define MPU_DEVICE_PATH_MAG_1		"/dev/mpu9250_mag1"
+
 #define MPU_DEVICE_PATH_ACCEL_EXT	"/dev/mpu9250_accel_ext"
 #define MPU_DEVICE_PATH_GYRO_EXT	"/dev/mpu9250_gyro_ext"
 #define MPU_DEVICE_PATH_MAG_EXT 	"/dev/mpu9250_mag_ext"
+
+#define MPU_DEVICE_PATH_ACCEL_EXT1	"/dev/mpu9250_accel_ext1"
+#define MPU_DEVICE_PATH_GYRO_EXT1	"/dev/mpu9250_gyro_ext1"
+#define MPU_DEVICE_PATH_MAG_EXT1 	"/dev/mpu9250_mag_ext1"
+
+#define MPU_DEVICE_PATH_ACCEL_EXT2	"/dev/mpu9250_accel_ext2"
+#define MPU_DEVICE_PATH_GYRO_EXT2	"/dev/mpu9250_gyro_ext2"
+#define MPU_DEVICE_PATH_MAG_EXT2	"/dev/mpu9250_mag_ext2"
 
 /** driver 'main' command */
 extern "C" { __EXPORT int mpu9250_main(int argc, char *argv[]); }
@@ -87,6 +100,7 @@ enum MPU9250_BUS {
 	MPU9250_BUS_I2C_INTERNAL,
 	MPU9250_BUS_I2C_EXTERNAL,
 	MPU9250_BUS_SPI_INTERNAL,
+	MPU9250_BUS_SPI_INTERNAL2,
 	MPU9250_BUS_SPI_EXTERNAL
 };
 
@@ -109,21 +123,31 @@ struct mpu9250_bus_option {
 	MPU9250_constructor interface_constructor;
 	bool magpassthrough;
 	uint8_t busnum;
+	uint32_t address;
 	MPU9250	*dev;
 } bus_options[] = {
 #if defined (USE_I2C)
 #  if defined(PX4_I2C_BUS_ONBOARD)
-	{ MPU9250_BUS_I2C_INTERNAL, MPU_DEVICE_PATH_ACCEL, MPU_DEVICE_PATH_GYRO, MPU_DEVICE_PATH_MAG,  &MPU9250_I2C_interface, false, PX4_I2C_BUS_ONBOARD, NULL },
+	{ MPU9250_BUS_I2C_INTERNAL, MPU_DEVICE_PATH_ACCEL, MPU_DEVICE_PATH_GYRO, MPU_DEVICE_PATH_MAG,  &MPU9250_I2C_interface, false, PX4_I2C_BUS_ONBOARD, PX4_I2C_OBDEV_MPU9250, NULL },
 #  endif
 #  if defined(PX4_I2C_BUS_EXPANSION)
-	{ MPU9250_BUS_I2C_EXTERNAL, MPU_DEVICE_PATH_ACCEL_EXT, MPU_DEVICE_PATH_GYRO_EXT, MPU_DEVICE_PATH_MAG_EXT, &MPU9250_I2C_interface, false, PX4_I2C_BUS_EXPANSION, NULL },
+	{ MPU9250_BUS_I2C_EXTERNAL, MPU_DEVICE_PATH_ACCEL_EXT, MPU_DEVICE_PATH_GYRO_EXT, MPU_DEVICE_PATH_MAG_EXT, &MPU9250_I2C_interface, false, PX4_I2C_BUS_EXPANSION, PX4_I2C_OBDEV_MPU9250, NULL },
+#  endif
+#  if defined(PX4_I2C_BUS_EXPANSION1)
+	{ MPU9250_BUS_I2C_EXTERNAL, MPU_DEVICE_PATH_ACCEL_EXT1, MPU_DEVICE_PATH_GYRO_EXT1, MPU_DEVICE_PATH_MAG_EXT1, &MPU9250_I2C_interface, false, PX4_I2C_BUS_EXPANSION1, PX4_I2C_OBDEV_MPU9250, NULL },
+#  endif
+#  if defined(PX4_I2C_BUS_EXPANSION2)
+	{ MPU9250_BUS_I2C_EXTERNAL, MPU_DEVICE_PATH_ACCEL_EXT2, MPU_DEVICE_PATH_GYRO_EXT2, MPU_DEVICE_PATH_MAG_EXT2, &MPU9250_I2C_interface, false, PX4_I2C_BUS_EXPANSION2, PX4_I2C_OBDEV_MPU9250, NULL },
 #  endif
 #endif
 #ifdef PX4_SPIDEV_MPU
-	{ MPU9250_BUS_SPI_INTERNAL, MPU_DEVICE_PATH_ACCEL, MPU_DEVICE_PATH_GYRO, MPU_DEVICE_PATH_MAG, &MPU9250_SPI_interface, true, PX4_SPI_BUS_SENSORS, NULL },
+	{ MPU9250_BUS_SPI_INTERNAL, MPU_DEVICE_PATH_ACCEL, MPU_DEVICE_PATH_GYRO, MPU_DEVICE_PATH_MAG, &MPU9250_SPI_interface, true, PX4_SPI_BUS_SENSORS, PX4_SPIDEV_MPU, NULL },
 #endif
-#if defined(PX4_SPI_BUS_EXT)
-	{ MPU9250_BUS_SPI_EXTERNAL, MPU_DEVICE_PATH_ACCEL_EXT, MPU_DEVICE_PATH_GYRO_EXT, MPU_DEVICE_PATH_MAG_EXT, &MPU9250_SPI_interface, true, PX4_SPI_BUS_EXT, NULL },
+#ifdef PX4_SPIDEV_MPU2
+	{ MPU9250_BUS_SPI_INTERNAL2, MPU_DEVICE_PATH_ACCEL_1, MPU_DEVICE_PATH_GYRO_1, MPU_DEVICE_PATH_MAG_1, &MPU9250_SPI_interface, true, PX4_SPI_BUS_SENSORS, PX4_SPIDEV_MPU2, NULL },
+#endif
+#if defined(PX4_SPI_BUS_EXT) && defined(PX4_SPIDEV_EXT_MPU)
+	{ MPU9250_BUS_SPI_EXTERNAL, MPU_DEVICE_PATH_ACCEL_EXT, MPU_DEVICE_PATH_GYRO_EXT, MPU_DEVICE_PATH_MAG_EXT, &MPU9250_SPI_interface, true, PX4_SPI_BUS_EXT, PX4_SPIDEV_EXT_MPU, NULL },
 #endif
 };
 
@@ -169,7 +193,7 @@ start_bus(struct mpu9250_bus_option &bus, enum Rotation rotation, bool external)
 		return false;
 	}
 
-	device::Device *interface = bus.interface_constructor(bus.busnum, external);
+	device::Device *interface = bus.interface_constructor(bus.busnum, bus.address, external);
 
 	if (interface == nullptr) {
 		warnx("no device on bus %u", (unsigned)bus.busid);
@@ -331,16 +355,7 @@ test(enum MPU9250_BUS busid)
 		err(1, "immediate acc read failed");
 	}
 
-	warnx("single read");
-	warnx("time:     %lld", a_report.timestamp);
-	warnx("acc  x:  \t%8.4f\tm/s^2", (double)a_report.x);
-	warnx("acc  y:  \t%8.4f\tm/s^2", (double)a_report.y);
-	warnx("acc  z:  \t%8.4f\tm/s^2", (double)a_report.z);
-	warnx("acc  x:  \t%d\traw 0x%0x", (short)a_report.x_raw, (unsigned short)a_report.x_raw);
-	warnx("acc  y:  \t%d\traw 0x%0x", (short)a_report.y_raw, (unsigned short)a_report.y_raw);
-	warnx("acc  z:  \t%d\traw 0x%0x", (short)a_report.z_raw, (unsigned short)a_report.z_raw);
-	warnx("acc range: %8.4f m/s^2 (%8.4f g)", (double)a_report.range_m_s2,
-	      (double)(a_report.range_m_s2 / MPU9250_ONE_G));
+	print_message(a_report);
 
 	/* do a simple demand read */
 	sz = read(fd_gyro, &g_report, sizeof(g_report));
@@ -350,17 +365,7 @@ test(enum MPU9250_BUS busid)
 		err(1, "immediate gyro read failed");
 	}
 
-	warnx("gyro x: \t% 9.5f\trad/s", (double)g_report.x);
-	warnx("gyro y: \t% 9.5f\trad/s", (double)g_report.y);
-	warnx("gyro z: \t% 9.5f\trad/s", (double)g_report.z);
-	warnx("gyro x: \t%d\traw", (int)g_report.x_raw);
-	warnx("gyro y: \t%d\traw", (int)g_report.y_raw);
-	warnx("gyro z: \t%d\traw", (int)g_report.z_raw);
-	warnx("gyro range: %8.4f rad/s (%d deg/s)", (double)g_report.range_rad_s,
-	      (int)((g_report.range_rad_s / M_PI_F) * 180.0f + 0.5f));
-
-	warnx("temp:  \t%8.4f\tdeg celsius", (double)a_report.temperature);
-	warnx("temp:  \t%d\traw 0x%0x", (short)a_report.temperature_raw, (unsigned short)a_report.temperature_raw);
+	print_message(g_report);
 
 	/* do a simple demand read */
 	sz = read(fd_mag, &m_report, sizeof(m_report));
@@ -370,14 +375,7 @@ test(enum MPU9250_BUS busid)
 		err(1, "immediate mag read failed");
 	}
 
-	warnx("mag x: \t% 9.5f\tGa", (double)m_report.x);
-	warnx("mag y: \t% 9.5f\tGa", (double)m_report.y);
-	warnx("mag z: \t% 9.5f\tGa", (double)m_report.z);
-	warnx("mag x: \t%d\traw", (int)m_report.x_raw);
-	warnx("mag y: \t%d\traw", (int)m_report.y_raw);
-	warnx("mag z: \t%d\traw", (int)m_report.z_raw);
-	warnx("mag range: %8.4f Ga", (double)m_report.range_ga);
-	warnx("mag temp:  %8.4f\tdeg celsius", (double)m_report.temperature);
+	print_message(m_report);
 
 	/* reset to default polling */
 	if (ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
@@ -479,10 +477,15 @@ testerror(enum MPU9250_BUS busid)
 void
 usage()
 {
-	warnx("missing command: try 'start', 'info', 'test', 'stop',\n'reset', 'regdump', 'testerror'");
-	warnx("options:");
-	warnx("    -X    (external bus)");
-	warnx("    -R rotation");
+	PX4_INFO("missing command: try 'start', 'info', 'test', 'stop',\n'reset', 'regdump', 'testerror'");
+	PX4_INFO("options:");
+	PX4_INFO("    -X    (i2c external bus)");
+	PX4_INFO("    -I    (i2c internal bus)");
+	PX4_INFO("    -s    (spi internal bus)");
+	PX4_INFO("    -S    (spi external bus)");
+	PX4_INFO("    -t    (spi internal bus, 2nd instance)");
+	PX4_INFO("    -R rotation");
+
 }
 
 } // namespace
@@ -490,13 +493,14 @@ usage()
 int
 mpu9250_main(int argc, char *argv[])
 {
-	enum MPU9250_BUS busid = MPU9250_BUS_ALL;
+	int myoptind = 1;
 	int ch;
-	bool external = false;
+	const char *myoptarg = nullptr;
+
+	enum MPU9250_BUS busid = MPU9250_BUS_ALL;
 	enum Rotation rotation = ROTATION_NONE;
 
-	/* jump over start/off/etc and look at options first */
-	while ((ch = getopt(argc, argv, "XISsR:")) != EOF) {
+	while ((ch = px4_getopt(argc, argv, "XISstR:", &myoptind, &myoptarg)) != EOF) {
 		switch (ch) {
 		case 'X':
 			busid = MPU9250_BUS_I2C_EXTERNAL;
@@ -514,23 +518,30 @@ mpu9250_main(int argc, char *argv[])
 			busid = MPU9250_BUS_SPI_INTERNAL;
 			break;
 
+		case 't':
+			busid = MPU9250_BUS_SPI_INTERNAL2;
+			break;
+
 		case 'R':
-			rotation = (enum Rotation)atoi(optarg);
+			rotation = (enum Rotation)atoi(myoptarg);
 			break;
 
 		default:
 			mpu9250::usage();
-			exit(0);
+			return 0;
 		}
 	}
 
-	external = (busid == MPU9250_BUS_I2C_EXTERNAL || busid == MPU9250_BUS_SPI_EXTERNAL);
+	if (myoptind >= argc) {
+		mpu9250::usage();
+		return -1;
+	}
 
-	const char *verb = argv[optind];
+	bool external = busid == MPU9250_BUS_I2C_EXTERNAL || busid == MPU9250_BUS_SPI_EXTERNAL;
+	const char *verb = argv[myoptind];
 
 	/*
 	 * Start/load the driver.
-
 	 */
 	if (!strcmp(verb, "start")) {
 		mpu9250::start(busid, rotation, external);
@@ -573,5 +584,5 @@ mpu9250_main(int argc, char *argv[])
 	}
 
 	mpu9250::usage();
-	exit(1);
+	return 0;
 }

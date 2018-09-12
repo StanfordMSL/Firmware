@@ -39,6 +39,7 @@
 
 #include <px4_config.h>
 #include <px4_defines.h>
+#include <ecl/geo/geo.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -58,7 +59,7 @@
 
 #include <px4_log.h>
 
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 
 #include <nuttx/arch.h>
 #include <nuttx/clock.h>
@@ -98,6 +99,7 @@
 #  define XYZ_DATA_CFG_FS_8G       (2 << XYZ_DATA_CFG_FS_SHIFTS)
 
 #define FXOS8701CQ_WHOAMI          0x0d
+#  define FXOS8700CQ_WHOAMI_VAL    0xC7
 #  define FXOS8701CQ_WHOAMI_VAL    0xCA
 
 #define FXOS8701CQ_CTRL_REG1       0x2a
@@ -136,7 +138,6 @@
 
 #define FXOS8701C_MAG_DEFAULT_RANGE_GA               12 /* It is fixed at 12 G */
 #define FXOS8701C_MAG_DEFAULT_RATE                   100
-#define FXOS8701C_ONE_G                              9.80665f
 
 /*
   we set the timer interrupt to run a bit faster than the desired
@@ -304,20 +305,6 @@ private:
 	 * Fetch mag measurements from the sensor and update the report ring.
 	 */
 	void			mag_measure();
-
-	/**
-	 * Accel self test
-	 *
-	 * @return 0 on success, 1 on failure
-	 */
-	int			accel_self_test();
-
-	/**
-	 * Mag self test
-	 *
-	 * @return 0 on success, 1 on failure
-	 */
-	int			mag_self_test();
 
 	/**
 	 * Read a register from the FXOS8701C
@@ -506,10 +493,8 @@ FXOS8701CQ::FXOS8701CQ(int bus, const char *path, uint32_t device, enum Rotation
 	_last_raw_mag_z(0),
 	_checked_next(0)
 {
-
-
 	// enable debug() calls
-	_debug_enabled = true;
+	_debug_enabled = false;
 
 	_device_id.devid_s.devtype = DRV_ACC_DEVTYPE_FXOS8701C;
 
@@ -570,20 +555,33 @@ FXOS8701CQ::init()
 	/* do SPI init (and probe) first */
 	if (SPI::init() != OK) {
 		PX4_ERR("SPI init failed");
-		goto out;
+		return PX4_ERROR;
 	}
 
 	/* allocate basic report buffers */
 	_accel_reports = new ringbuffer::RingBuffer(2, sizeof(accel_report));
 
 	if (_accel_reports == nullptr) {
-		goto out;
+		return PX4_ERROR;
 	}
 
 	_mag_reports = new ringbuffer::RingBuffer(2, sizeof(mag_report));
 
 	if (_mag_reports == nullptr) {
-		goto out;
+		return PX4_ERROR;
+	}
+
+	// set software low pass filter for controllers
+	param_t accel_cut_ph = param_find("IMU_ACCEL_CUTOFF");
+	float accel_cut = FXOS8701C_ACCEL_DEFAULT_DRIVER_FILTER_FREQ;
+
+	if (accel_cut_ph != PARAM_INVALID && param_get(accel_cut_ph, &accel_cut) == PX4_OK) {
+		PX4_INFO("accel cutoff set to %.2f Hz", double(accel_cut));
+
+		accel_set_driver_lowpass_filter(FXOS8701C_ACCEL_DEFAULT_RATE, accel_cut);
+
+	} else {
+		PX4_ERR("IMU_ACCEL_CUTOFF param invalid");
 	}
 
 	reset();
@@ -593,7 +591,7 @@ FXOS8701CQ::init()
 
 	if (ret != OK) {
 		PX4_ERR("MAG init failed");
-		goto out;
+		return PX4_ERROR;
 	}
 
 	/* fill report structures */
@@ -609,6 +607,7 @@ FXOS8701CQ::init()
 
 	if (_mag->_mag_topic == nullptr) {
 		PX4_ERR("ADVERT ERR");
+		return PX4_ERROR;
 	}
 
 
@@ -624,10 +623,10 @@ FXOS8701CQ::init()
 
 	if (_accel_topic == nullptr) {
 		PX4_ERR("ADVERT ERR");
+		return PX4_ERROR;
 	}
 
-out:
-	return ret;
+	return PX4_OK;
 }
 
 
@@ -672,10 +671,11 @@ int
 FXOS8701CQ::probe()
 {
 	/* verify that the device is attached and functioning */
-	bool success = (read_reg(FXOS8701CQ_WHOAMI) == FXOS8701CQ_WHOAMI_VAL);
+	uint8_t whoami = read_reg(FXOS8701CQ_WHOAMI);
+	bool success = (whoami == FXOS8700CQ_WHOAMI_VAL) || (whoami == FXOS8701CQ_WHOAMI_VAL);
 
 	if (success) {
-		_checked_values[0] = FXOS8701CQ_WHOAMI_VAL;
+		_checked_values[0] = whoami;
 		return OK;
 	}
 
@@ -877,15 +877,12 @@ FXOS8701CQ::ioctl(struct file *filp, int cmd, unsigned long arg)
 
 	case ACCELIOCGRANGE:
 		/* convert to m/s^2 and return rounded in G */
-		return (unsigned long)((_accel_range_m_s2) / FXOS8701C_ONE_G + 0.5f);
+		return (unsigned long)((_accel_range_m_s2) / CONSTANTS_ONE_G + 0.5f);
 
 	case ACCELIOCGSCALE:
 		/* copy scale out */
 		memcpy((struct accel_calibration_s *) arg, &_accel_scale, sizeof(_accel_scale));
 		return OK;
-
-	case ACCELIOCSELFTEST:
-		return accel_self_test();
 
 	default:
 		/* give it to the superclass */
@@ -992,15 +989,6 @@ FXOS8701CQ::mag_ioctl(struct file *filp, int cmd, unsigned long arg)
 		memcpy((struct mag_calibration_s *) arg, &_mag_scale, sizeof(_mag_scale));
 		return OK;
 
-	case MAGIOCSRANGE:
-		return mag_set_range(arg);
-
-	case MAGIOCGRANGE:
-		return _mag_range_ga;
-
-	case MAGIOCSELFTEST:
-		return mag_self_test();
-
 	case MAGIOCGEXTERNAL:
 		/* Even if this sensor is on the "external" SPI bus
 		 * it is still fixed to the autopilot assembly,
@@ -1012,51 +1000,6 @@ FXOS8701CQ::mag_ioctl(struct file *filp, int cmd, unsigned long arg)
 		/* give it to the superclass */
 		return SPI::ioctl(filp, cmd, arg);
 	}
-}
-
-int
-FXOS8701CQ::accel_self_test()
-{
-	/*todo:Implement
-	 * set to 2 Jmode Save current samples
-	 *  Light bit and look for the offsets.
-	 * ±2 g mode, X-axis 	+192
-	 * ±2 g mode, Y-axis 	+270
-	 * ±2 g mode, Z-axis 	+1275
-	*/
-
-
-	if (_accel_read == 0) {
-		return 1;
-	}
-
-	return 0;
-}
-
-int
-FXOS8701CQ::mag_self_test()
-{
-	if (_mag_read == 0) {
-		return 1;
-	}
-
-	/**
-	 * inspect mag offsets
-	 * don't check mag scale because it seems this is calibrated on chip
-	 */
-	if (fabsf(_mag_scale.x_offset) < 0.000001f) {
-		return 1;
-	}
-
-	if (fabsf(_mag_scale.y_offset) < 0.000001f) {
-		return 1;
-	}
-
-	if (fabsf(_mag_scale.z_offset) < 0.000001f) {
-		return 1;
-	}
-
-	return 0;
 }
 
 uint8_t
@@ -1135,8 +1078,8 @@ FXOS8701CQ::accel_set_range(unsigned max_g)
 		max_accel_g = 2;
 	}
 
-	_accel_range_scale = (FXOS8701C_ONE_G / lsb_per_g);
-	_accel_range_m_s2 = max_accel_g * FXOS8701C_ONE_G;
+	_accel_range_scale = (CONSTANTS_ONE_G / lsb_per_g);
+	_accel_range_m_s2 = max_accel_g * CONSTANTS_ONE_G;
 
 
 	modify_reg(FXOS8701CQ_XYZ_DATA_CFG, XYZ_DATA_CFG_FS_MASK, setbits);
@@ -1393,9 +1336,7 @@ FXOS8701CQ::measure()
 	 * one device to the next
 	 */
 
-	write_checked_reg(FXOS8701CQ_M_CTRL_REG1, M_CTRL_REG1_HMS_A | M_CTRL_REG1_OS(7));
 	_last_temperature = (read_reg(FXOS8701CQ_TEMP)) * 0.96f;
-	write_checked_reg(FXOS8701CQ_M_CTRL_REG1, M_CTRL_REG1_HMS_AM | M_CTRL_REG1_OS(7));
 
 	accel_report.temperature = _last_temperature;
 
@@ -1462,8 +1403,8 @@ FXOS8701CQ::measure()
 	accel_report.y = _accel_filter_y.apply(y_in_new);
 	accel_report.z = _accel_filter_z.apply(z_in_new);
 
-	math::Vector<3> aval(x_in_new, y_in_new, z_in_new);
-	math::Vector<3> aval_integrated;
+	matrix::Vector3f aval(x_in_new, y_in_new, z_in_new);
+	matrix::Vector3f aval_integrated;
 
 	bool accel_notify = _accel_int.put(accel_report.timestamp, aval, aval_integrated, accel_report.integral_dt);
 	accel_report.x_integral = aval_integrated(0);
@@ -1471,7 +1412,6 @@ FXOS8701CQ::measure()
 	accel_report.z_integral = aval_integrated(2);
 
 	accel_report.scaling = _accel_range_scale;
-	accel_report.range_m_s2 = _accel_range_m_s2;
 
 	/* return device ID */
 	accel_report.device_id = _device_id.devid;
@@ -1537,7 +1477,6 @@ FXOS8701CQ::mag_measure()
 	mag_report.y = ((yraw_f * _mag_range_scale) - _mag_scale.y_offset) * _mag_scale.y_scale;
 	mag_report.z = ((zraw_f * _mag_range_scale) - _mag_scale.z_offset) * _mag_scale.z_scale;
 	mag_report.scaling = _mag_range_scale;
-	mag_report.range_ga = (float)_mag_range_ga;
 	mag_report.error_count = perf_event_count(_bad_registers) + perf_event_count(_bad_values);
 
 	mag_report.temperature = _last_temperature;
@@ -1698,6 +1637,7 @@ void	start(bool external_bus, enum Rotation rotation, unsigned range);
 void	test();
 void	reset();
 void	info();
+void	stop();
 void	regdump();
 void	usage();
 void	test_error();
@@ -1819,8 +1759,6 @@ test()
 	PX4_INFO("accel y: \t%d\traw", (int)accel_report.y_raw);
 	PX4_INFO("accel z: \t%d\traw", (int)accel_report.z_raw);
 
-	PX4_INFO("accel range: %8.4f m/s^2", (double)accel_report.range_m_s2);
-
 	/* get the driver */
 	fd_mag = open(FXOS8701C_DEVICE_PATH_MAG, O_RDONLY);
 
@@ -1851,7 +1789,6 @@ test()
 	PX4_INFO("mag x: \t%d\traw", (int)m_report.x_raw);
 	PX4_INFO("mag y: \t%d\traw", (int)m_report.y_raw);
 	PX4_INFO("mag z: \t%d\traw", (int)m_report.z_raw);
-	PX4_INFO("mag range: %8.4f ga", (double)m_report.range_ga);
 
 	/* reset to default polling */
 	if (ioctl(fd_accel, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
@@ -1941,6 +1878,20 @@ info()
 	exit(0);
 }
 
+void
+stop()
+{
+	if (g_dev == nullptr) {
+		PX4_ERR("driver not running\n");
+		exit(1);
+	}
+
+	delete g_dev;
+	g_dev = nullptr;
+
+	exit(0);
+}
+
 /**
  * dump registers from device
  */
@@ -1977,7 +1928,7 @@ test_error()
 void
 usage()
 {
-	PX4_INFO("missing command: try 'start', 'info', 'test', 'reset', 'testerror' or 'regdump'");
+	PX4_INFO("missing command: try 'start', 'info', 'stop', 'test', 'reset', 'testerror' or 'regdump'");
 	PX4_INFO("options:");
 	PX4_INFO("    -X    (external bus)");
 	PX4_INFO("    -R rotation");
@@ -2034,6 +1985,10 @@ fxos8701cq_main(int argc, char *argv[])
 		fxos8701cq::test();
 	}
 
+	if (!strcmp(verb, "stop")) {
+		fxos8701cq::stop();
+	}
+
 	/*
 	 * Reset the driver.
 	 */
@@ -2062,5 +2017,5 @@ fxos8701cq_main(int argc, char *argv[])
 		fxos8701cq::test_error();
 	}
 
-	errx(1, "unrecognized command, try 'start', 'test', 'reset', 'info', 'testerror' or 'regdump'");
+	errx(1, "unrecognized command, try 'start', 'stop', 'test', 'reset', 'info', 'testerror' or 'regdump'");
 }

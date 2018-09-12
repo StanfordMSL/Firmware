@@ -131,14 +131,6 @@
 #define PX4_I2C_BUS_EXPANSION	2
 #define PX4_I2C_BUS_LED		PX4_I2C_BUS_EXPANSION
 
-/* Devices on the onboard bus.
- *
- * Note that these are unshifted addresses.
- */
-#define PX4_I2C_OBDEV_HMC5883	0x1e
-#define PX4_I2C_OBDEV_LED	0x55
-// #define PX4_I2C_OBDEV_MPU6050	0x68
-
 /*
  * ADC channels
  *
@@ -278,7 +270,7 @@
 
 // #define GPIO_RSSI_IN                (GPIO_INPUT|GPIO_PULLUP|GPIO_PORTC|GPIO_PIN1)
 #define GPIO_SBUS_INV                  (GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_2MHz|GPIO_OUTPUT_SET|GPIO_PORTA|GPIO_PIN10)
-#define INVERT_RC_INPUT(_invert_true)  px4_arch_gpiowrite(GPIO_SBUS_INV, _invert_true);
+#define BOARD_INVERT_RC_INPUT(_invert_true, _na)  px4_arch_gpiowrite(GPIO_SBUS_INV, _invert_true);
 
 #define GPIO_FRSKY_INV                (GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_2MHz|GPIO_OUTPUT_SET|GPIO_PORTB|GPIO_PIN12)
 #define INVERT_FRSKY(_invert_true)    px4_arch_gpiowrite(GPIO_FRSKY_INV, _invert_true);
@@ -341,6 +333,10 @@
 /* This board provides a DMA pool and APIs */
 
 #define BOARD_DMA_ALLOC_POOL_SIZE 5120
+
+/* This board provides the board_on_reset interface */
+
+#define BOARD_HAS_ON_RESET 1
 
 __BEGIN_DECLS
 

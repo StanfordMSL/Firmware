@@ -50,7 +50,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <unistd.h>
-#include <getopt.h>
+#include <px4_getopt.h>
 #include <px4_log.h>
 
 #include <nuttx/arch.h>
@@ -61,12 +61,12 @@
 #include <board_config.h>
 #include "bmp280.h"
 
-#include <drivers/device/device.h>
+#include <lib/cdev/CDev.hpp>
 #include <drivers/drv_baro.h>
 #include <drivers/drv_hrt.h>
 #include <drivers/device/ringbuffer.h>
 
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
 
@@ -86,7 +86,7 @@ enum BMP280_BUS {
  * BMP280 internal constants and data structures.
  */
 
-class BMP280 : public device::CDev
+class BMP280 : public cdev::CDev
 {
 public:
 	BMP280(bmp280::IBMP280 *interface, const char *path);
@@ -116,9 +116,6 @@ private:
 	ringbuffer::RingBuffer	*_reports;
 
 	bool			_collect_phase;
-
-	/* altitude conversion calibration */
-	unsigned		_msl_pressure;	/* in Pa */
 
 	orb_advert_t		_baro_topic;
 	int					_orb_class_instance;
@@ -151,13 +148,12 @@ private:
 extern "C" __EXPORT int bmp280_main(int argc, char *argv[]);
 
 BMP280::BMP280(bmp280::IBMP280 *interface, const char *path) :
-	CDev("BMP280", path),
+	CDev(path),
 	_interface(interface),
 	_running(false),
 	_report_ticks(0),
 	_reports(nullptr),
 	_collect_phase(false),
-	_msl_pressure(101325),
 	_baro_topic(nullptr),
 	_orb_class_instance(-1),
 	_class_instance(-1),
@@ -198,12 +194,10 @@ BMP280::~BMP280()
 int
 BMP280::init()
 {
-	int ret;
-
-	ret = CDev::init();
+	int ret = CDev::init();
 
 	if (ret != OK) {
-		DEVICE_DEBUG("CDev init failed");
+		PX4_ERR("CDev init failed");
 		return ret;
 	}
 
@@ -211,7 +205,7 @@ BMP280::init()
 	_reports = new ringbuffer::RingBuffer(2, sizeof(baro_report));
 
 	if (_reports == nullptr) {
-		DEVICE_DEBUG("can't get memory for reports");
+		PX4_ERR("can't get memory for reports");
 		ret = -ENOMEM;
 		return ret;
 	}
@@ -418,19 +412,6 @@ BMP280::ioctl(struct file *filp, int cmd, unsigned long arg)
 		 */
 		return OK;
 
-	case BAROIOCSMSLPRESSURE:
-
-		/* range-check for sanity */
-		if ((arg < 80000) || (arg > 120000)) {
-			return -EINVAL;
-		}
-
-		_msl_pressure = arg;
-		return OK;
-
-	case BAROIOCGMSLPRESSURE:
-		return _msl_pressure;
-
 	default:
 		break;
 	}
@@ -551,33 +532,8 @@ BMP280::collect()
 	report.temperature = _T;
 	report.pressure = _P / 100.0f; // to mbar
 
-
-	/* altitude calculations based on http://www.kansasflyer.org/index.asp?nav=Avi&sec=Alti&tab=Theory&pg=1 */
-
-	/* tropospheric properties (0-11km) for standard atmosphere */
-	const float T1 = 15.0f + 273.15f;	/* temperature at base height in Kelvin */
-	const float a  = -6.5f / 1000.0f;	/* temperature gradient in degrees per metre */
-	const float g  = 9.80665f;	/* gravity constant in m/s/s */
-	const float R  = 287.05f;	/* ideal gas constant in J/kg/K */
-	float pK = _P / _msl_pressure;
-
-	/*
-	 * Solve:
-	 *
-	 *     /        -(aR / g)     \
-	 *    | (p / p1)          . T1 | - T1
-	 *     \                      /
-	 * h = -------------------------------  + h1
-	 *                   a
-	 */
-	report.altitude = (((powf(pK, (-(a * R) / g))) * T1) - T1) / a;
-
-
 	/* publish it */
-	if (!(_pub_blocked)) {
-		/* publish it */
-		orb_publish(ORB_ID(sensor_baro), _baro_topic, &report);
-	}
+	orb_publish(ORB_ID(sensor_baro), _baro_topic, &report);
 
 	_reports->force(&report);
 
@@ -596,10 +552,10 @@ BMP280::print_info()
 	perf_print_counter(_comms_errors);
 	printf("poll interval:  %u us \n", _report_ticks * USEC_PER_TICK);
 	_reports->print_info("report queue");
-	printf("P Pa:              %.3f\n", (double)_P);
-	printf("T:              %.3f\n", (double)_T);
-	printf("MSL pressure Pa:   %u\n", _msl_pressure);
 
+	sensor_baro_s brp = {};
+	_reports->get(&brp);
+	print_message(brp);
 }
 
 /**
@@ -623,8 +579,12 @@ struct bmp280_bus_option {
 #if defined(PX4_SPIDEV_EXT_BARO) && defined(PX4_SPI_BUS_EXT)
 	{ BMP280_BUS_SPI_EXTERNAL, "/dev/bmp280_spi_ext", &bmp280_spi_interface, PX4_SPI_BUS_EXT, PX4_SPIDEV_EXT_BARO, true, NULL },
 #endif
-#ifdef PX4_SPIDEV_BARO
+#if defined(PX4_SPIDEV_BARO)
+#  if defined(PX4_SPIDEV_BARO_BUS)
+	{ BMP280_BUS_SPI_INTERNAL, "/dev/bmp280_spi_int", &bmp280_spi_interface, PX4_SPIDEV_BARO_BUS, PX4_SPIDEV_BARO, false, NULL },
+#  else
 	{ BMP280_BUS_SPI_INTERNAL, "/dev/bmp280_spi_int", &bmp280_spi_interface, PX4_SPI_BUS_SENSORS, PX4_SPIDEV_BARO, false, NULL },
+#  endif
 #endif
 #ifdef PX4_I2C_OBDEV_BMP280
 	{ BMP280_BUS_I2C_INTERNAL, "/dev/bmp280_i2c_int", &bmp280_i2c_interface, PX4_I2C_BUS_EXPANSION, PX4_I2C_OBDEV_BMP280, false, NULL },
@@ -641,7 +601,6 @@ void	start(enum BMP280_BUS busid);
 void	test(enum BMP280_BUS busid);
 void	reset(enum BMP280_BUS busid);
 void	info();
-void	calibrate(unsigned altitude, enum BMP280_BUS busid);
 void	usage();
 
 
@@ -778,11 +737,7 @@ test(enum BMP280_BUS busid)
 		exit(1);
 	}
 
-	PX4_WARN("single read");
-	PX4_WARN("pressure:    %10.4f", (double)report.pressure);
-	PX4_WARN("altitude:    %11.4f", (double)report.altitude);
-	PX4_WARN("temperature: %8.4f", (double)report.temperature);
-	PX4_WARN("time:        %lld", report.timestamp);
+	print_message(report);
 
 	/* set the queue depth to 10 */
 	if (OK != ioctl(fd, SENSORIOCSQUEUEDEPTH, 10)) {
@@ -818,11 +773,7 @@ test(enum BMP280_BUS busid)
 			exit(1);
 		}
 
-		PX4_WARN("periodic read %u", i);
-		PX4_WARN("pressure:    %10.4f", (double)report.pressure);
-		PX4_WARN("altitude:    %11.4f", (double)report.altitude);
-		PX4_WARN("temperature K: %8.4f", (double)report.temperature);
-		PX4_WARN("time:        %lld", report.timestamp);
+		print_message(report);
 	}
 
 	close(fd);
@@ -877,92 +828,10 @@ info()
 	exit(0);
 }
 
-/**
- * Calculate actual MSL pressure given current altitude
- */
-void
-calibrate(unsigned altitude, enum BMP280_BUS busid)
-{
-	struct bmp280_bus_option &bus = find_bus(busid);
-	struct baro_report report;
-	float	pressure;
-	float	p1;
-
-	int fd;
-
-	fd = open(bus.devpath, O_RDONLY);
-
-	if (fd < 0) {
-		PX4_ERR("open failed (try 'bmp280 start' if the driver is not running)");
-		exit(1);
-	}
-
-	/* start the sensor polling at max */
-	if (OK != ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_MAX)) {
-		PX4_ERR("failed to set poll rate");
-		exit(1);
-	}
-
-	/* average a few measurements */
-	pressure = 0.0f;
-
-	for (unsigned i = 0; i < 20; i++) {
-		struct pollfd fds;
-		int ret;
-		ssize_t sz;
-
-		/* wait for data to be ready */
-		fds.fd = fd;
-		fds.events = POLLIN;
-		ret = poll(&fds, 1, 1000);
-
-		if (ret != 1) {
-			PX4_ERR("timed out waiting for sensor data");
-			exit(1);
-		}
-
-		/* now go get it */
-		sz = read(fd, &report, sizeof(report));
-
-		if (sz != sizeof(report)) {
-			PX4_ERR("sensor read failed");
-			exit(1);
-		}
-
-		pressure += report.pressure;
-	}
-
-	pressure /= 20;		/* average */
-	pressure /= 10;		/* scale from millibar to kPa */
-
-	/* tropospheric properties (0-11km) for standard atmosphere */
-	const float T1 = 15.0 + 273.15;	/* temperature at base height in Kelvin */
-	const float a  = -6.5 / 1000;	/* temperature gradient in degrees per metre */
-	const float g  = 9.80665f;	/* gravity constant in m/s/s */
-	const float R  = 287.05f;	/* ideal gas constant in J/kg/K */
-
-	PX4_WARN("averaged pressure %10.4fkPa at %um", (double)pressure, altitude);
-
-	p1 = pressure * (powf(((T1 + (a * (float)altitude)) / T1), (g / (a * R))));
-
-	PX4_WARN("calculated MSL pressure %10.4fkPa", (double)p1);
-
-	/* save as integer Pa */
-	p1 *= 1000.0f;
-
-	if (ioctl(fd, BAROIOCSMSLPRESSURE, (unsigned long)p1) != OK) {
-		PX4_ERR("BAROIOCSMSLPRESSURE");
-		exit(1);
-	}
-
-	close(fd);
-	exit(0);
-}
-
 void
 usage()
 {
-	PX4_WARN("missing command: try 'start', 'info', 'test', 'test2', 'reset', 'calibrate'");
+	PX4_WARN("missing command: try 'start', 'info', 'test', 'test2', 'reset'");
 	PX4_WARN("options:");
 	PX4_WARN("    -X    (external I2C bus TODO)");
 	PX4_WARN("    -I    (internal I2C bus TODO)");
@@ -975,11 +844,12 @@ usage()
 int
 bmp280_main(int argc, char *argv[])
 {
-	enum BMP280_BUS busid = BMP280_BUS_ALL;
+	int myoptind = 1;
 	int ch;
+	const char *myoptarg = nullptr;
+	enum BMP280_BUS busid = BMP280_BUS_ALL;
 
-	/* jump over start/off/etc and look at options first */
-	while ((ch = getopt(argc, argv, "XISs")) != EOF) {
+	while ((ch = px4_getopt(argc, argv, "XISs", &myoptind, &myoptarg)) != EOF) {
 		switch (ch) {
 		case 'X':
 			busid = BMP280_BUS_I2C_EXTERNAL;
@@ -987,8 +857,6 @@ bmp280_main(int argc, char *argv[])
 
 		case 'I':
 			busid = BMP280_BUS_I2C_INTERNAL;
-			//PX4_ERR("not supported yet");
-			//exit(1);
 			break;
 
 		case 'S':
@@ -1001,11 +869,16 @@ bmp280_main(int argc, char *argv[])
 
 		default:
 			bmp280::usage();
-			exit(0);
+			return 0;
 		}
 	}
 
-	const char *verb = argv[optind];
+	if (myoptind >= argc) {
+		bmp280::usage();
+		return -1;
+	}
+
+	const char *verb = argv[myoptind];
 
 	/*
 	 * Start/load the driver.
@@ -1035,20 +908,6 @@ bmp280_main(int argc, char *argv[])
 		bmp280::info();
 	}
 
-	/*
-	 * Perform MSL pressure calibration given an altitude in metres
-	 */
-	if (!strcmp(verb, "calibrate")) {
-		if (argc < 2) {
-			PX4_ERR("missing altitude");
-			exit(1);
-		}
-
-		long altitude = strtol(argv[optind + 1], nullptr, 10);
-
-		bmp280::calibrate(altitude, busid);
-	}
-
 	PX4_ERR("unrecognized command, try 'start', 'test', 'reset' or 'info'");
-	exit(1);
+	return -1;
 }

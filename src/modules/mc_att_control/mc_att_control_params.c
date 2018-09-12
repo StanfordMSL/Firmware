@@ -40,34 +40,6 @@
  */
 
 /**
- * Roll time constant
- *
- * Reduce if the system is too twitchy, increase if the response is too slow and sluggish.
- *
- * @unit s
- * @min 0.15
- * @max 0.25
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_ROLL_TC, 0.2f);
-
-/**
- * Pitch time constant
- *
- * Reduce if the system is too twitchy, increase if the response is too slow and sluggish.
- *
- * @unit s
- * @min 0.15
- * @max 0.25
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_PITCH_TC, 0.2f);
-
-/**
  * Roll P gain
  *
  * Roll proportional gain, i.e. desired angular speed in rad/s for error 1 rad.
@@ -292,19 +264,6 @@ PARAM_DEFINE_FLOAT(MC_YAWRATE_D, 0.0f);
 PARAM_DEFINE_FLOAT(MC_YAWRATE_FF, 0.0f);
 
 /**
- * Yaw feed forward
- *
- * Feed forward weight for manual yaw control. 0 will give slow responce and no overshot, 1 - fast responce and big overshot.
- *
- * @min 0.0
- * @max 1.0
- * @decimal 2
- * @increment 0.01
- * @group Multicopter Attitude Control
- */
-PARAM_DEFINE_FLOAT(MC_YAW_FF, 0.5f);
-
-/**
  * Max roll rate
  *
  * Limit for roll rate in manual and auto modes (except acro).
@@ -375,7 +334,7 @@ PARAM_DEFINE_FLOAT(MC_YAWRAUTO_MAX, 45.0f);
  *
  * @unit deg/s
  * @min 0.0
- * @max 1000.0
+ * @max 1800.0
  * @decimal 1
  * @increment 5
  * @group Multicopter Attitude Control
@@ -388,7 +347,7 @@ PARAM_DEFINE_FLOAT(MC_ACRO_R_MAX, 720.0f);
  *
  * @unit deg/s
  * @min 0.0
- * @max 1000.0
+ * @max 1800.0
  * @decimal 1
  * @increment 5
  * @group Multicopter Attitude Control
@@ -401,7 +360,7 @@ PARAM_DEFINE_FLOAT(MC_ACRO_P_MAX, 720.0f);
  *
  * @unit deg/s
  * @min 0.0
- * @max 1000.0
+ * @max 1800.0
  * @decimal 1
  * @increment 5
  * @group Multicopter Attitude Control
@@ -409,8 +368,9 @@ PARAM_DEFINE_FLOAT(MC_ACRO_P_MAX, 720.0f);
 PARAM_DEFINE_FLOAT(MC_ACRO_Y_MAX, 540.0f);
 
 /**
- * Acro Expo factor
- * applied to input of all axis: roll, pitch, yaw
+ * Acro mode Expo factor for Roll and Pitch.
+ *
+ * Exponential factor for tuning the input curve shape.
  *
  * 0 Purely linear input curve
  * 1 Purely cubic input curve
@@ -423,8 +383,24 @@ PARAM_DEFINE_FLOAT(MC_ACRO_Y_MAX, 540.0f);
 PARAM_DEFINE_FLOAT(MC_ACRO_EXPO, 0.69f);
 
 /**
- * Acro SuperExpo factor
- * applied to input of all axis: roll, pitch, yaw
+ * Acro mode Expo factor for Yaw.
+ *
+ * Exponential factor for tuning the input curve shape.
+ *
+ * 0 Purely linear input curve
+ * 1 Purely cubic input curve
+ *
+ * @min 0
+ * @max 1
+ * @decimal 2
+ * @group Multicopter Attitude Control
+ */
+PARAM_DEFINE_FLOAT(MC_ACRO_EXPO_Y, 0.69f);
+
+/**
+ * Acro mode SuperExpo factor for Roll and Pitch.
+ *
+ * SuperExpo factor for refining the input curve shape tuned using MC_ACRO_EXPO.
  *
  * 0 Pure Expo function
  * 0.7 resonable shape enhancement for intuitive stick feel
@@ -436,6 +412,22 @@ PARAM_DEFINE_FLOAT(MC_ACRO_EXPO, 0.69f);
  * @group Multicopter Attitude Control
  */
 PARAM_DEFINE_FLOAT(MC_ACRO_SUPEXPO, 0.7f);
+
+/**
+ * Acro mode SuperExpo factor for Yaw.
+ *
+ * SuperExpo factor for refining the input curve shape tuned using MC_ACRO_EXPO_Y.
+ *
+ * 0 Pure Expo function
+ * 0.7 resonable shape enhancement for intuitive stick feel
+ * 0.95 very strong bent input curve only near maxima have effect
+ *
+ * @min 0
+ * @max 0.95
+ * @decimal 2
+ * @group Multicopter Attitude Control
+ */
+PARAM_DEFINE_FLOAT(MC_ACRO_SUPEXPOY, 0.7f);
 
 /**
  * Threshold for Rattitude mode
@@ -570,4 +562,18 @@ PARAM_DEFINE_FLOAT(MC_TPA_RATE_D, 0.0f);
  * @increment 10
  * @group Multicopter Attitude Control
  */
-PARAM_DEFINE_FLOAT(MC_DTERM_CUTOFF, 0.f);
+PARAM_DEFINE_FLOAT(MC_DTERM_CUTOFF, 30.f);
+
+/**
+ * Multicopter air-mode
+ *
+ * The air-mode enables the mixer to increase the total thrust of the multirotor
+ * in order to keep attitude and rate control even at low and high throttle.
+ * This function should be disabled during tuning as it will help the controller
+ * to diverge if the closed-loop is unstable.
+ *
+ * @boolean
+ * @group Multicopter Attitude Control
+ */
+PARAM_DEFINE_INT32(MC_AIRMODE, 0);
+

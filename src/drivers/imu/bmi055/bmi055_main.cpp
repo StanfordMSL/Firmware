@@ -1,20 +1,50 @@
+/****************************************************************************
+ *
+ *   Copyright (c) 2018 PX4 Development Team. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ * 3. Neither the name PX4 nor the names of its contributors may be
+ *    used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+ * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+ * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ ****************************************************************************/
+
+#include "BMI055_accel.hpp"
+#include "BMI055_gyro.hpp"
+
 #include <px4_config.h>
 #include <platforms/px4_getopt.h>
-#include "bmi055.hpp"
 
 /** driver 'main' command */
 extern "C" { __EXPORT int bmi055_main(int argc, char *argv[]); }
-
-/**
- * Local functions in support of the shell command.
- */
 
 enum sensor_type {
 	BMI055_NONE = 0,
 	BMI055_ACCEL = 1,
 	BMI055_GYRO
 };
-
 
 namespace bmi055
 {
@@ -24,7 +54,6 @@ BMI055_accel    *g_acc_dev_ext; // on external bus (accel)
 BMI055_gyro     *g_gyr_dev_int; // on internal bus (gyro)
 BMI055_gyro     *g_gyr_dev_ext; // on external bus (gyro)
 
-
 void    start(bool, enum Rotation, enum sensor_type);
 void    stop(bool, enum sensor_type);
 void    test(bool, enum sensor_type);
@@ -33,7 +62,6 @@ void    info(bool, enum sensor_type);
 void    regdump(bool, enum sensor_type);
 void    testerror(bool, enum sensor_type);
 void    usage();
-
 
 /**
  * Start the driver.
@@ -50,7 +78,6 @@ start(bool external_bus, enum Rotation rotation, enum sensor_type sensor)
 	const char *path_accel = external_bus ? BMI055_DEVICE_PATH_ACCEL_EXT : BMI055_DEVICE_PATH_ACCEL;
 	BMI055_gyro **g_dev_gyr_ptr = external_bus ? &g_gyr_dev_ext : &g_gyr_dev_int;
 	const char *path_gyro  = external_bus ? BMI055_DEVICE_PATH_GYRO_EXT : BMI055_DEVICE_PATH_GYRO;
-
 
 	if (sensor == BMI055_ACCEL) {
 		if (*g_dev_acc_ptr != nullptr)
@@ -154,7 +181,6 @@ fail_gyro:
 
 	PX4_WARN("No BMI055 gyro found");
 	exit(PX4_ERROR);
-
 }
 
 void
@@ -225,19 +251,7 @@ test(bool external_bus, enum sensor_type sensor)
 			err(1, "immediate accel read failed");
 		}
 
-		warnx("single read");
-		warnx("time:     %lld", a_report.timestamp);
-		warnx("acc  x:  \t%8.4f\tm/s^2", (double)a_report.x);
-		warnx("acc  y:  \t%8.4f\tm/s^2", (double)a_report.y);
-		warnx("acc  z:  \t%8.4f\tm/s^2", (double)a_report.z);
-		warnx("acc  x:  \t%d\traw 0x%0x", (short)a_report.x_raw, (unsigned short)a_report.x_raw);
-		warnx("acc  y:  \t%d\traw 0x%0x", (short)a_report.y_raw, (unsigned short)a_report.y_raw);
-		warnx("acc  z:  \t%d\traw 0x%0x", (short)a_report.z_raw, (unsigned short)a_report.z_raw);
-		warnx("acc range: %8.4f m/s^2 (%8.4f g)", (double)a_report.range_m_s2,
-		      (double)(a_report.range_m_s2 / BMI055_ONE_G));
-		warnx("temp:  \t%8.4f\tdeg celsius", (double)a_report.temperature);
-		warnx("temp:  \t%d\traw 0x%0x", (short)g_report.temperature_raw, (unsigned short)a_report.temperature_raw);
-
+		print_message(a_report);
 
 		/* reset to default polling */
 		if (ioctl(fd_acc, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
@@ -261,7 +275,6 @@ test(bool external_bus, enum sensor_type sensor)
 			err(1, "gyro reset to manual polling");
 		}
 
-
 		/* do a simple demand read */
 		sz = read(fd_gyr, &g_report, sizeof(g_report));
 
@@ -270,15 +283,7 @@ test(bool external_bus, enum sensor_type sensor)
 			err(1, "immediate gyro read failed");
 		}
 
-		warnx("gyr x: \t% 9.5f\trad/s", (double)g_report.x);
-		warnx("gyr y: \t% 9.5f\trad/s", (double)g_report.y);
-		warnx("gyr z: \t% 9.5f\trad/s", (double)g_report.z);
-		warnx("gyr x: \t%d\traw", (int)g_report.x_raw);
-		warnx("gyr y: \t%d\traw", (int)g_report.y_raw);
-		warnx("gyr z: \t%d\traw", (int)g_report.z_raw);
-		warnx("gyr range: %8.4f rad/s (%d deg/s)", (double)g_report.range_rad_s,
-		      (int)((g_report.range_rad_s / M_PI_F) * 180.0f + 0.5f));
-
+		print_message(g_report);
 
 		/* reset to default polling */
 		if (ioctl(fd_gyr, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
@@ -286,7 +291,6 @@ test(bool external_bus, enum sensor_type sensor)
 		}
 
 		close(fd_gyr);
-
 	}
 
 	if ((sensor == BMI055_ACCEL) || (sensor == BMI055_GYRO)) {
@@ -295,7 +299,6 @@ test(bool external_bus, enum sensor_type sensor)
 	}
 
 	errx(0, "PASS");
-
 }
 
 /**
@@ -346,7 +349,6 @@ reset(bool external_bus, enum sensor_type sensor)
 
 	exit(0);
 }
-
 
 /**
  * Print a little info about the driver.
@@ -408,7 +410,6 @@ regdump(bool external_bus, enum sensor_type sensor)
 	exit(0);
 }
 
-
 /**
  * deliberately produce an error to test recovery
  */
@@ -446,7 +447,6 @@ usage()
 	warnx("    -R    rotation");
 	warnx("    -A    (Enable Accelerometer)");
 	warnx("    -G    (Enable Gyroscope)");
-
 }
 
 }//namespace ends
@@ -459,33 +459,11 @@ BMI055::BMI055(const char *name, const char *devname, int bus, uint32_t device, 
 	_call{},
 	_call_interval(0),
 	_dlpf_freq(0),
-	_sample_perf(perf_alloc(PC_ELAPSED, "bmi055_read")),
-	_bad_transfers(perf_alloc(PC_COUNT, "bmi055_bad_transfers")),
-	_bad_registers(perf_alloc(PC_COUNT, "bmi055_bad_registers")),
-	_good_transfers(perf_alloc(PC_COUNT, "bmi055_good_transfers")),
-	_reset_retries(perf_alloc(PC_COUNT, "bmi055_reset_retries")),
-	_duplicates(perf_alloc(PC_COUNT, "bmi055_duplicates")),
-	_controller_latency_perf(perf_alloc_once(PC_ELAPSED, "ctrl_latency")),
 	_register_wait(0),
 	_reset_wait(0),
 	_rotation(rotation),
 	_checked_next(0)
 {
-
-}
-
-
-
-BMI055::~BMI055()
-{
-	/* delete the perf counter */
-	perf_free(_sample_perf);
-	perf_free(_bad_transfers);
-	perf_free(_bad_registers);
-	perf_free(_good_transfers);
-	perf_free(_reset_retries);
-	perf_free(_duplicates);
-
 }
 
 uint8_t
@@ -496,7 +474,6 @@ BMI055::read_reg(unsigned reg)
 	transfer(cmd, cmd, sizeof(cmd));
 
 	return cmd[1];
-
 }
 
 uint16_t
@@ -509,7 +486,6 @@ BMI055::read_reg16(unsigned reg)
 	return (uint16_t)(cmd[1] << 8) | cmd[2];
 }
 
-
 void
 BMI055::write_reg(unsigned reg, uint8_t value)
 {
@@ -520,8 +496,6 @@ BMI055::write_reg(unsigned reg, uint8_t value)
 
 	transfer(cmd, nullptr, sizeof(cmd));
 }
-
-
 
 int
 bmi055_main(int argc, char *argv[])
@@ -614,4 +588,3 @@ bmi055_main(int argc, char *argv[])
 	bmi055::usage();
 	exit(1);
 }
-

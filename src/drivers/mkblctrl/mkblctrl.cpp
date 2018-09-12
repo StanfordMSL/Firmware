@@ -44,7 +44,7 @@
 #include <px4_config.h>
 #include <px4_tasks.h>
 #include <drivers/device/i2c.h>
-#include <systemlib/param/param.h>
+#include <parameters/param.h>
 
 #include <sys/types.h>
 #include <stdint.h>
@@ -71,7 +71,6 @@
 #include <drivers/drv_mixer.h>
 #include <drivers/drv_tone_alarm.h>
 
-#include <systemlib/systemlib.h>
 #include <systemlib/err.h>
 #include <lib/mixer/mixer.h>
 
@@ -450,7 +449,7 @@ void
 MK::play_beep(int count)
 {
 	tune_control_s tune = {};
-	tune.tune_id = tune_control_s::TUNE_ID_SINGLE_BEEP;
+	tune.tune_id = static_cast<int>(TuneID::SINGLE_BEEP);
 
 	for (int i = 0; i < count; i++) {
 		orb_publish(ORB_ID(tune_control), _tune_control_sub, &tune);

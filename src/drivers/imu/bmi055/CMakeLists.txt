@@ -33,13 +33,10 @@
 px4_add_module(
 	MODULE drivers__bmi055
 	MAIN bmi055
-	STACK_MAIN 1200
-	COMPILE_FLAGS
+	STACK_MAIN 1500
 	SRCS		
-		bmi055_accel.cpp
-		bmi055_gyro.cpp
+		BMI055_accel.cpp
+		BMI055_gyro.cpp
 		bmi055_main.cpp
-	DEPENDS
-		platforms__common
 	)
-# vim: set noet ft=cmake fenc=utf-8 ff=unix :
+
