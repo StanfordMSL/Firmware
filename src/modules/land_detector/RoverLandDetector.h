@@ -54,19 +54,13 @@ public:
 	RoverLandDetector() = default;
 
 protected:
-	virtual void _update_params() override;
+	bool _get_ground_contact_state() override;
+	bool _get_landed_state() override;
 
-	virtual void _update_topics() override;
+	float _get_max_altitude() override;
 
-	virtual bool _get_landed_state() override;
-
-	virtual bool  _get_ground_contact_state() override;
-
-	virtual bool _get_maybe_landed_state() override;
-
-	virtual bool _get_freefall_state() override;
-
-	virtual float _get_max_altitude() override;
+	void _update_params() override;
+	void _update_topics() override;
 
 private:
 };

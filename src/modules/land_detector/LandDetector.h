@@ -42,15 +42,20 @@
 
 #pragma once
 
-#include <px4_module.h>
+#include <math.h>
+
 #include <lib/hysteresis/hysteresis.h>
 #include <parameters/param.h>
 #include <perf/perf_counter.h>
+#include <px4_module.h>
+#include <px4_work_queue/ScheduledWorkItem.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/actuator_armed.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/sensor_bias.h>
 #include <uORB/topics/vehicle_land_detected.h>
-#include <px4_work_queue/ScheduledWorkItem.hpp>
+#include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_local_position_setpoint.h>
 
 using namespace time_literals;
 
@@ -71,13 +76,16 @@ public:
 	LandDetector();
 	virtual ~LandDetector();
 
-	static int task_spawn(int argc, char *argv[]);
-
 	/** @see ModuleBase */
 	static int custom_command(int argc, char *argv[])
 	{
 		return print_usage("unknown command");
 	}
+
+	/**
+	 * @return current state.
+	 */
+	LandDetectionState get_state() const { return _state; }
 
 	/** @see ModuleBase */
 	static int print_usage(const char *reason = nullptr);
@@ -85,13 +93,7 @@ public:
 	/** @see ModuleBase::print_status() */
 	int print_status() override;
 
-	/**
-	 * @return current state.
-	 */
-	LandDetectionState get_state() const
-	{
-		return _state;
-	}
+	static int task_spawn(int argc, char *argv[]);
 
 	/**
 	 * Get the work queue going.
@@ -101,24 +103,9 @@ public:
 protected:
 
 	/**
-	 * Update uORB topics.
+	 * @return true if UAV is in free-fall state.
 	 */
-	virtual void _update_topics() = 0;
-
-	/**
-	 * Update parameters.
-	 */
-	virtual void _update_params() = 0;
-
-	/**
-	 * @return true if UAV is in a landed state.
-	 */
-	virtual bool _get_landed_state() = 0;
-
-	/**
-	 * @return true if UAV is in almost landed state
-	 */
-	virtual bool _get_maybe_landed_state() { return false; }
+	virtual bool _get_freefall_state() { return false; }
 
 	/**
 	 * @return true if UAV is touching ground but not landed
@@ -126,25 +113,39 @@ protected:
 	virtual bool _get_ground_contact_state() { return false; }
 
 	/**
-	 * @return true if UAV is in free-fall state.
-	 */
-	virtual bool _get_freefall_state() { return false; }
-
-	/**
-	 *  @return maximum altitude that can be reached
-	 */
-	virtual float _get_max_altitude() = 0;
-
-	/**
 	 *  @return true if vehicle could be in ground effect (close to ground)
 	 */
 	virtual bool _get_ground_effect_state() { return false; }
 
-	/** Run main land detector loop at this interval. */
-	static constexpr uint32_t LAND_DETECTOR_UPDATE_INTERVAL = 20_ms;
+	/**
+	 * @return true if UAV is in a landed state.
+	 */
+	virtual bool _get_landed_state() { return false; }
 
-	orb_advert_t _landDetectedPub{nullptr};
-	vehicle_land_detected_s _landDetected{};
+	/**
+	 * @return true if UAV is in almost landed state
+	 */
+	virtual bool _get_maybe_landed_state() { return false; }
+
+	/**
+	 *  @return maximum altitude that can be reached
+	 */
+	virtual float _get_max_altitude() { return INFINITY; }
+
+	/**
+	 * Update parameters.
+	 */
+	virtual void _update_params();
+
+	/**
+	 * Update uORB topics.
+	 */
+	virtual void _update_topics();
+
+	/** Run main land detector loop at this interval. */
+	static constexpr uint32_t LAND_DETECTOR_UPDATE_INTERVAL{20_ms};
+
+	orb_advert_t _land_detected_pub{nullptr};
 
 	LandDetectionState _state{LandDetectionState::LANDED};
 
@@ -154,26 +155,40 @@ protected:
 	systemlib::Hysteresis _ground_contact_hysteresis{true};
 	systemlib::Hysteresis _ground_effect_hysteresis{false};
 
-	struct actuator_armed_s	_arming {};
+	actuator_armed_s _actuator_armed{};
+	sensor_bias_s _sensor_bias{};
+	vehicle_land_detected_s _land_detected{};
+	vehicle_local_position_s _vehicle_local_position{};
 
 private:
-	void Run() override;
+	void _check_params(const bool force = false);
 
-	void _check_params(bool force = false);
+	void Run() override;
 
 	void _update_state();
 
-	param_t _p_total_flight_time_high{PARAM_INVALID};
-	param_t _p_total_flight_time_low{PARAM_INVALID};
+	struct {
+		param_t total_flight_time_high{PARAM_INVALID};
+		param_t total_flight_time_low{PARAM_INVALID};
+	} _paramHandle{};
+
+	struct {
+		float total_flight_time_high{0};
+		float total_flight_time_low{0};
+	} _params{};
+
+	bool _previous_armed_state{false}; ///< stores the previous _actuator_armed.armed state
+
 	uint64_t _total_flight_time{0}; ///< in microseconds
+
 	hrt_abstime _takeoff_time{0};
 
-	perf_counter_t	_cycle_perf;
+	perf_counter_t _cycle_perf{perf_alloc(PC_ELAPSED, "land_detector_cycle")};
 
-	bool _previous_arming_state{false}; ///< stores the previous _arming.armed state
-
-	uORB::Subscription _parameterSub{ORB_ID(parameter_update)};
-	uORB::Subscription _armingSub{ORB_ID(actuator_armed)};
+	uORB::Subscription _actuator_armed_sub{ORB_ID(actuator_armed)};
+	uORB::Subscription _parameter_sub{ORB_ID(parameter_update)};
+	uORB::Subscription _sensor_bias_sub{ORB_ID(sensor_bias)};
+	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 };
 
 } // namespace land_detector

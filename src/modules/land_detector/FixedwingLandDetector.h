@@ -45,8 +45,6 @@
 #include <drivers/drv_hrt.h>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/airspeed.h>
-#include <uORB/topics/sensor_bias.h>
-#include <uORB/topics/vehicle_local_position.h>
 
 #include "LandDetector.h"
 
@@ -65,7 +63,6 @@ protected:
 	void _update_topics() override;
 
 	bool _get_landed_state() override;
-	float _get_max_altitude() override;
 
 private:
 
@@ -74,31 +71,28 @@ private:
 	static constexpr hrt_abstime FLYING_TRIGGER_TIME_US = 0_us;
 
 	struct {
-		param_t maxVelocity;
-		param_t maxClimbRate;
-		param_t maxAirSpeed;
-		param_t maxXYAccel;
+		param_t max_air_speed;
+		param_t max_climb_rate;
+		param_t max_velocity;
+		param_t max_XY_accel;
 	} _paramHandle{};
 
 	struct {
-		float maxVelocity;
-		float maxClimbRate;
-		float maxAirSpeed;
-		float maxXYAccel;
+		float max_air_speed;
+		float max_climb_rate;
+		float max_velocity;
+		float max_XY_accel;
 	} _params{};
 
-	uORB::Subscription _airspeedSub{ORB_ID(airspeed)};
-	uORB::Subscription _sensor_bias_sub{ORB_ID(sensor_bias)};
-	uORB::Subscription _local_pos_sub{ORB_ID(vehicle_local_position});
-
 	airspeed_s _airspeed{};
-	sensor_bias_s _sensors{};
-	vehicle_local_position_s _local_pos{};
 
+	float _accel_horz_lp{0.0f};
+	float _airspeed_filtered{0.0f};
 	float _velocity_xy_filtered{0.0f};
 	float _velocity_z_filtered{0.0f};
-	float _airspeed_filtered{0.0f};
-	float _accel_horz_lp{0.0f};
+
+	uORB::Subscription _airspeed_sub{ORB_ID(airspeed)};
+	uORB::Subscription _local_pos_sub{ORB_ID(vehicle_local_position)};
 };
 
 } // namespace land_detector

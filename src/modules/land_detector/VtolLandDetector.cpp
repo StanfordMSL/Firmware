@@ -51,14 +51,6 @@ VtolLandDetector::VtolLandDetector()
 	_paramHandle.maxAirSpeed = param_find("LNDFW_AIRSPD_MAX");
 }
 
-void VtolLandDetector::_update_topics()
-{
-	MulticopterLandDetector::_update_topics();
-
-	_airspeedSub.update(&_airspeed);
-	_vehicle_status_sub.update(&_vehicle_status);
-}
-
 bool VtolLandDetector::_get_maybe_landed_state()
 {
 	// Only trigger in RW mode
@@ -80,7 +72,7 @@ bool VtolLandDetector::_get_landed_state()
 	bool landed = MulticopterLandDetector::_get_landed_state();
 
 	// for vtol we additionally consider airspeed
-	if (hrt_elapsed_time(&_airspeed.timestamp) < 500 * 1000 && _airspeed.confidence > 0.99f
+	if (hrt_elapsed_time(&_airspeed.timestamp) < 500_ms && _airspeed.confidence > 0.99f
 	    && PX4_ISFINITE(_airspeed.indicated_airspeed_m_s)) {
 
 		_airspeed_filtered = 0.95f * _airspeed_filtered + 0.05f * _airspeed.indicated_airspeed_m_s;
@@ -106,6 +98,14 @@ void VtolLandDetector::_update_params()
 	MulticopterLandDetector::_update_params();
 
 	param_get(_paramHandle.maxAirSpeed, &_params.maxAirSpeed);
+}
+
+void VtolLandDetector::_update_topics()
+{
+	MulticopterLandDetector::_update_topics();
+
+	_airspeed_sub.update(&_airspeed);
+	_vehicle_status_sub.update(&_vehicle_status);
 }
 
 } // namespace land_detector

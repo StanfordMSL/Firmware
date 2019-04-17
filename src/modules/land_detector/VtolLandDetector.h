@@ -56,10 +56,11 @@ public:
 	VtolLandDetector();
 
 protected:
-	void _update_params() override;
-	void _update_topics() override;
 	bool _get_landed_state() override;
 	bool _get_maybe_landed_state() override;
+
+	void _update_params() override;
+	void _update_topics() override;
 
 private:
 	struct {
@@ -70,14 +71,15 @@ private:
 		float maxAirSpeed;
 	} _params{};
 
-	uORB::Subscription _airspeedSub{ORB_ID(airspeed)};
-	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
-
-	airspeed_s		_airspeed{};
-	vehicle_status_s	_vehicle_status{};
-
 	bool _was_in_air{false}; /**< indicates whether the vehicle was in the air in the previous iteration */
+
 	float _airspeed_filtered{0.0f}; /**< low pass filtered airspeed */
+
+	airspeed_s _airspeed{};
+	vehicle_status_s _vehicle_status{};
+
+	uORB::Subscription _airspeed_sub{ORB_ID(airspeed)};
+	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 };
 
 

@@ -46,16 +46,13 @@
 
 #include <parameters/param.h>
 #include <uORB/Subscription.hpp>
-#include <uORB/topics/vehicle_local_position.h>
-#include <uORB/topics/vehicle_local_position_setpoint.h>
-#include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/actuator_controls.h>
 #include <uORB/topics/battery_status.h>
 #include <uORB/topics/parameter_update.h>
-#include <uORB/topics/sensor_bias.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_local_position_setpoint.h>
 
 using namespace time_literals;
 
@@ -68,91 +65,86 @@ public:
 	MulticopterLandDetector();
 
 protected:
+	bool _get_freefall_state() override;
+	bool _get_ground_contact_state() override;
+	bool _get_ground_effect_state() override;
+	bool _get_landed_state() override;
+	bool _get_maybe_landed_state() override;
+
+	float _get_max_altitude() override;
+
 	void _update_params() override;
 	void _update_topics() override;
 
-	bool _get_landed_state() override;
-	bool _get_ground_contact_state() override;
-	bool _get_maybe_landed_state() override;
-	bool _get_freefall_state() override;
-	bool _get_ground_effect_state() override;
-
-	float _get_max_altitude() override;
 private:
+
+	// Get control mode dependent pilot throttle threshold with which we should quit landed state and take off.
+	float _get_takeoff_throttle();
+	bool _has_altitude_lock();
+	bool _has_position_lock();
+	bool _has_low_thrust();
+	bool _has_minimal_thrust();
+	bool _is_climb_rate_enabled();
 
 	/** Time in us that landing conditions have to hold before triggering a land. */
 	static constexpr hrt_abstime LAND_DETECTOR_TRIGGER_TIME_US = 300_ms;
 
-	/** Time in us that almost landing conditions have to hold before triggering almost landed . */
+	/** Time in us that almost landing conditions have to hold before triggering almost landed. */
 	static constexpr hrt_abstime MAYBE_LAND_DETECTOR_TRIGGER_TIME_US = 250_ms;
 
-	/** Time in us that ground contact condition have to hold before triggering contact ground */
+	/** Time in us that ground contact condition have to hold before triggering contact ground. */
 	static constexpr hrt_abstime GROUND_CONTACT_TRIGGER_TIME_US = 350_ms;
 
 	/** Time interval in us in which wider acceptance thresholds are used after landed. */
 	static constexpr hrt_abstime LAND_DETECTOR_LAND_PHASE_TIME_US = 2_s;
 
-	/**
-	* @brief Handles for interesting parameters
-	**/
+	/** Handles for interesting parameters. */
 	struct {
-		param_t maxClimbRate;
-		param_t maxVelocity;
-		param_t maxRotation;
-		param_t minThrottle;
-		param_t hoverThrottle;
-		param_t minManThrottle;
+		param_t altitude_max;
 		param_t freefall_acc_threshold;
 		param_t freefall_trigger_time;
-		param_t altitude_max;
+		param_t hover_throttle;
 		param_t landSpeed;
 		param_t low_thrust_threshold;
+		param_t max_climb_rate;
+		param_t max_rotation_rad_s;
+		param_t max_velocity;
+		param_t min_manual_throttle;
+		param_t min_throttle;
 	} _paramHandle{};
 
 	struct {
-		float maxClimbRate;
-		float maxVelocity;
-		float maxRotation_rad_s;
-		float minThrottle;
-		float hoverThrottle;
-		float minManThrottle;
+		float altitude_max;
 		float freefall_acc_threshold;
 		float freefall_trigger_time;
-		float altitude_max;
+		float hover_throttle;
 		float landSpeed;
 		float low_thrust_threshold;
+		float max_climb_rate;
+		float max_rotation_rad_s;
+		float max_velocity;
+		float min_manual_throttle;
+		float min_throttle;
 	} _params{};
 
-	uORB::Subscription _vehicleLocalPositionSub{ORB_ID(vehicle_local_position)};
-	uORB::Subscription _vehicleLocalPositionSetpointSub{ORB_ID(vehicle_local_position_setpoint)};
-	uORB::Subscription _actuatorsSub{ORB_ID(actuator_controls_0)};
-	uORB::Subscription _attitudeSub{ORB_ID(vehicle_attitude)};
-	uORB::Subscription _sensor_bias_sub{ORB_ID(sensor_bias)};
-	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
-	uORB::Subscription _battery_sub{ORB_ID(battery_status)};
-
-	vehicle_local_position_s				_vehicleLocalPosition {};
-	vehicle_local_position_setpoint_s	_vehicleLocalPositionSetpoint {};
-	actuator_controls_s					_actuators {};
-	vehicle_attitude_s					_vehicleAttitude {};
-	sensor_bias_s					_sensors {};
-	vehicle_control_mode_s				_control_mode {};
-	battery_status_s						_battery {};
-
-	hrt_abstime _min_trust_start{0};		///< timestamp when minimum trust was applied first
-	hrt_abstime _landed_time{0};
-
-	bool _in_descend{false};	///< vehicle is desending
 	bool _horizontal_movement{false};	///< vehicle is moving horizontally
+	bool _in_descend{false};		///< vehicle is desending
 
-	/* get control mode dependent pilot throttle threshold with which we should quit landed state and take off */
-	float _get_takeoff_throttle();
-	bool _has_altitude_lock();
-	bool _has_position_lock();
-	bool _has_minimal_thrust();
-	bool _has_low_thrust();
-	bool _is_climb_rate_enabled();
+	hrt_abstime _landed_time{0};
+	hrt_abstime _min_trust_start{0};	///< timestamp when minimum trust was applied first
+
+	actuator_controls_s _actuator_controls {};
+	battery_status_s _battery_status {};
+	vehicle_attitude_s _vehicle_attitude {};
+	vehicle_control_mode_s _vehicle_control_mode {};
+	vehicle_local_position_setpoint_s _vehicle_local_position_setpoint {};
+
+	uORB::Subscription _actuator_controls_sub{ORB_ID(actuator_controls_0)};
+	uORB::Subscription _battery_status_sub{ORB_ID(battery_status)};
+	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
+	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
+	uORB::Subscription _vehicle_local_position_setpoint_sub{ORB_ID(vehicle_local_position_setpoint)};
+
 };
-
 
 } // namespace land_detector
